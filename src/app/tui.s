@@ -76,6 +76,10 @@
 .equ K_PGDN,  0x110008
 .equ K_PASTE, 0x110010
 
+# modal picker kinds (mirror src/tui/menu.s)
+.equ MK_MODEL,    1
+.equ MK_THINKING, 2
+
 .equ RECV_CHUNK2, 65536
 .equ TUI_MAX_DIM, 4096
 .equ FOOT_MAXED,  4
@@ -154,6 +158,24 @@
 .Lthinking:  .asciz "thinking: "
 .Lthinking_bad: .asciz "thinking: unknown '"
 .Lthinking_suf: .asciz "' (off|low|medium|high)"
+# modal picker row metadata (model picker descriptions, thinking rows)
+.Lpick_cur:   .asciz "(current) "
+.Lpick_ctx:   .asciz " ctx="
+.Lpick_reason: .asciz " reasoning"
+.Lpick_image: .asciz " image"
+.Ltn_off:     .asciz "off"
+.Ltn_low:     .asciz "low"
+.Ltn_medium:  .asciz "medium"
+.Ltn_high:    .asciz "high"
+.Ltd_off:     .asciz "disable reasoning"
+.Ltd_low:     .asciz "low reasoning effort"
+.Ltd_medium:  .asciz "medium reasoning effort"
+.Ltd_high:    .asciz "high reasoning effort"
+.p2align 3
+.Lthink_names:
+    .quad .Ltn_off, .Ltn_low, .Ltn_medium, .Ltn_high
+.Lthink_descs:
+    .quad .Ltd_off, .Ltd_low, .Ltd_medium, .Ltd_high
 .Lprompt_fail:  .asciz "prompt: cannot expand '"
 .Lskill_missing: .asciz "skill: missing skill name (try /skill:<name>)"
 .Lskill_unknown: .asciz "skill: unknown skill '"
@@ -265,6 +287,12 @@ t_md_scratch:     .zero MD_SIZE
 t_md_live:        .zero MD_SIZE
 t_md_live_base:   .zero 8
 t_md_live_on:     .zero 4
+# Modal picker row storage: the pointer arrays handed to menu_rows plus a bump
+# arena for the model-picker descriptions built each open.
+t_pickname:       .zero 8 * 32
+t_pickdesc:       .zero 8 * 32
+t_picktext:       .zero 8192
+t_pickbump:       .zero 8
 # S7 owned inline region state.  t_in_rows is the region height painted last
 # frame; t_in_commit is the first transcript message not yet printed to
 # scrollback; t_in_live_base is the number of view rows those committed
@@ -3026,6 +3054,9 @@ tui_handle_event:
     mov r12d, [rip + t_scr + 0]     # key
     mov r13d, [rip + t_scr + 4]     # cp
     mov r14d, [rip + t_scr + 8]     # mods
+    call menu_is_modal
+    test eax, eax
+    jnz .Le_modal
     call tui_menu_sync
     call menu_open
     test eax, eax
@@ -3083,6 +3114,53 @@ tui_handle_event:
     lea rdx, [rbx + 1]
     call editor_set
     call tui_submit_editor
+    EPILOGUE
+
+# ---- modal picker (MODEL/THINKING) ----------------------------------------
+# menu_key edits the filter and moves the selection; the shell applies the
+# highlighted row on Enter and lets Esc cancel (menu_key already closed it).
+.Le_modal:
+    mov esi, r12d
+    mov edx, r13d
+    mov ecx, r14d
+    call menu_key
+    cmp r12d, K_ENTER
+    je .Le_modal_enter
+    cmp r12d, K_ESC
+    je .Le_modal_esc
+    mov dword ptr [rip + t_dirty], 1
+    EPILOGUE
+.Le_modal_esc:
+    mov dword ptr [rip + t_dirty], 1
+    EPILOGUE
+.Le_modal_enter:
+    test r14d, 1                # only a plain Enter selects
+    jnz .Le_modal_done
+    call menu_count
+    test eax, eax
+    jz .Le_modal_done         # no match: keep the picker open
+    call menu_sel
+    mov edi, eax
+    call menu_name              # rax = selected cstr
+    mov rbx, rax
+    call menu_kind
+    cmp eax, MK_MODEL
+    je .Le_modal_model
+    cmp eax, MK_THINKING
+    je .Le_modal_think
+    call menu_close
+    jmp .Le_modal_done
+.Le_modal_model:
+    call menu_close
+    mov rdi, rbx
+    call tui_cmd_model
+    jmp .Le_modal_done
+.Le_modal_think:
+    call menu_close
+    mov rdi, rbx
+    call tui_cmd_thinking
+.Le_modal_done:
+    mov dword ptr [rip + t_dirty], 1
     EPILOGUE
 .Le_no_menu:
     cmp r12d, 0x0f               # ctrl-o: toggle the last tool card
@@ -3993,15 +4071,146 @@ tui_cmd_help:
     call tui_notice
     EPILOGUE
 
-# tui_cmd_model(rdi=args): /model - report, or switch when an id is given.
-tui_cmd_model:
+# tui_streq(rdi, rsi) -> eax 1|0.  Leaf cstr comparison for the pickers.
+tui_streq:
+    xor eax, eax
+1:  mov cl, [rdi]
+    cmp cl, [rsi]
+    jne 2f
+    test cl, cl
+    jz 3f
+    inc rdi
+    inc rsi
+    jmp 1b
+2:  ret
+3:  mov eax, 1
+    ret
+
+# tui_pick_putdesc() -> rax: copy the NUL-terminated t_osb into the picker bump
+# arena and return the stable pointer.  The arena is reset on every picker open.
+tui_pick_putdesc:
+    PROLOGUE 0
+    mov r12, [rip + t_osb + SB_ptr]
+    mov r13, [rip + t_osb + SB_len]
+    mov rdi, [rip + t_pickbump]
+    test rdi, rdi
+    jnz 1f
+    lea rdi, [rip + t_picktext]
+1:  mov rsi, r12
+    mov rdx, r13
+    call memcpy
+    mov byte ptr [rax + r13], 0
+    lea rcx, [rax + r13 + 1]
+    mov [rip + t_pickbump], rcx
+    EPILOGUE
+
+# tui_picker_open_model(): `/model` with no argument.  Build the current
+# provider's catalog rows (id + "(current) provider ctx= reasoning image") and
+# open the MODEL modal picker.  With no catalog, report the current model.
+FN tui_picker_open_model
     PROLOGUE 16
-    mov r12, rdi
-    call agent_busy
+    lea rax, [rip + t_picktext]
+    mov [rip + t_pickbump], rax
+    call agent_model_provider
+    mov r15, rax
+    call agent_model_id
+    mov r14, rax
+    call catalog_count
+    mov [rbp - 48], rax           # catalog size
+    xor r13d, r13d               # output count
+    xor r12d, r12d               # catalog index
+    mov dword ptr [rbp - 56], -1 # initial selection
+.Lpm_loop:
+    cmp r12, [rbp - 48]
+    jae .Lpm_done
+    mov rdi, r12
+    call catalog_at
+    test rax, rax
+    jz .Lpm_next
+    mov rbx, rax
+    mov rdi, [rbx + MD_provider]
+    mov rsi, r15
+    call tui_streq
     test eax, eax
-    jnz .Lcm_busy
-    cmp byte ptr [r12], 0
-    jne .Lcm_set
+    jz .Lpm_next
+    lea rax, [rip + t_pickname]
+    mov rdx, [rbx + MD_id]
+    mov [rax + r13*8], rdx
+    lea rdi, [rip + t_osb]
+    call sb_clear
+    mov rdi, [rbx + MD_id]
+    mov rsi, r14
+    call tui_streq
+    test eax, eax
+    jz 1f
+    lea rdi, [rip + t_osb]
+    lea rsi, [rip + .Lpick_cur]
+    call sb_push_cstr
+    mov [rbp - 56], r13d
+1:  lea rdi, [rip + t_osb]
+    mov rsi, r15
+    call sb_push_cstr
+    mov eax, [rbx + MD_ctx_window]
+    test eax, eax
+    jz 2f
+    lea rdi, [rip + t_osb]
+    lea rsi, [rip + .Lpick_ctx]
+    call sb_push_cstr
+    lea rdi, [rip + t_osb]
+    mov esi, [rbx + MD_ctx_window]
+    call sb_push_u64
+2:  mov eax, [rbx + MD_flags]
+    test eax, MDF_REASONING
+    jz 3f
+    lea rdi, [rip + t_osb]
+    lea rsi, [rip + .Lpick_reason]
+    call sb_push_cstr
+3:  mov eax, [rbx + MD_flags]
+    test eax, MDF_IMAGE
+    jz 4f
+    lea rdi, [rip + t_osb]
+    lea rsi, [rip + .Lpick_image]
+    call sb_push_cstr
+4:  call tui_pick_putdesc
+    lea rcx, [rip + t_pickdesc]
+    mov [rcx + r13*8], rax
+    inc r13d
+.Lpm_next:
+    inc r12
+    jmp .Lpm_loop
+.Lpm_done:
+    test r13d, r13d
+    jz .Lpm_none
+    mov esi, MK_MODEL
+    call menu_begin
+    lea rdi, [rip + t_pickname]
+    lea rsi, [rip + t_pickdesc]
+    mov edx, r13d
+    mov ecx, [rbp - 56]
+    call menu_rows
+    EPILOGUE
+.Lpm_none:
+    call tui_cmd_model_report
+    EPILOGUE
+
+# tui_picker_open_thinking(): `/thinking` with no argument.  The four levels
+# as a THINKING modal picker; the active level is the initial selection.
+FN tui_picker_open_thinking
+    PROLOGUE 0
+    call agent_thinking
+    mov r12d, eax
+    mov esi, MK_THINKING
+    call menu_begin
+    lea rdi, [rip + .Lthink_names]
+    lea rsi, [rip + .Lthink_descs]
+    mov edx, 4
+    mov ecx, r12d
+    call menu_rows
+    EPILOGUE
+
+# tui_cmd_model_report(): emit "model: <id> (<provider>)" as a dim notice.
+tui_cmd_model_report:
+    PROLOGUE 0
     lea rdi, [rip + t_osb]
     call sb_clear
     lea rdi, [rip + t_osb]
@@ -4025,7 +4234,22 @@ tui_cmd_model:
     lea rsi, [rip + .Lparen_close]
     mov edx, 1
     call sb_push
-    jmp .Lcm_emit
+    mov rdi, [rip + t_osb + SB_ptr]
+    mov rsi, [rip + t_osb + SB_len]
+    call tui_notice
+    EPILOGUE
+
+# tui_cmd_model(rdi=args): /model - open the picker, or switch when an id is given.
+tui_cmd_model:
+    PROLOGUE 16
+    mov r12, rdi
+    call agent_busy
+    test eax, eax
+    jnz .Lcm_busy
+    cmp byte ptr [r12], 0
+    jne .Lcm_set
+    call tui_picker_open_model
+    EPILOGUE
 .Lcm_set:
     xor edi, edi
     mov rsi, r12
@@ -4089,18 +4313,8 @@ tui_cmd_thinking:
 2:  mov byte ptr [rdi + rcx], 0
     cmp byte ptr [rdi], 0
     jne .Lth_set
-    lea rdi, [rip + t_osb]
-    call sb_clear
-    lea rdi, [rip + t_osb]
-    lea rsi, [rip + .Lthinking]
-    call sb_push_cstr
-    call agent_thinking
-    mov esi, eax
-    call agent_thinking_name
-    lea rdi, [rip + t_osb]
-    mov rsi, rax
-    call sb_push_cstr
-    jmp .Lth_emit
+    call tui_picker_open_thinking
+    EPILOGUE
 .Lth_set:
     lea rdi, [rbp - 64]
     call agent_thinking_parse

@@ -28,9 +28,12 @@
 # Distinct local names: editor.s defines its own K_* with the same values.
 .equ .LK_UP,    0x110001
 .equ .LK_DOWN,  0x110002
+.equ .LK_PGUP,  0x110007
+.equ .LK_PGDN,  0x110008
 .equ .LK_TAB,   0x09
 .equ .LK_ENTER, 0x0a
 .equ .LK_ESC,   0x1b
+.equ .LK_BACKSPACE, 0x7f
 
 # Cell attribute bits (render.s keeps its own copies).
 .equ .LA_DIM,      4
@@ -42,6 +45,14 @@
 .equ MENU_BUILTIN_N,   8
 .equ MENU_SRC_MAX,     MENU_STORE_MAX
 
+# Picker kinds.  COMMAND is the slash-command menu (text driven); MODEL and
+# THINKING are modal pickers whose rows are supplied by the app; PICK is the
+# standalone pre-TUI list used by the session picker.
+.equ MENU_KIND_COMMAND,  0
+.equ MENU_KIND_MODEL,    1
+.equ MENU_KIND_THINKING, 2
+.equ MENU_KIND_PICK,     3
+
 # Module state.  M_name/M_desc hold pointers into the builtin table so the
 # filtered order is cheap to reconstruct on every update.
 STRUCT
@@ -51,13 +62,20 @@ F M_sel,        4
 F M_top,        4
 F M_count,      4
 F M_flen,       4
+F M_kind,       4
 F M_filter,    64
 F M_name,     256
 F M_desc,     256
+# Explicit rows for the modal kinds (MODEL/THINKING/PICK): the full unfiltered
+# list, from which M_name/M_desc hold the filtered view.
+F M_all_count,  4
+F M_all_name, 256
+F M_all_desc, 256
 ENDSTRUCT M_SIZE
 
 # menu_render locals, addressed relative to rbp (frame leaves room to -144).
 .set MR_i,     -56
+.set MR_nx,    -144
 .set MR_cnt,   -64
 .set MR_top,   -72
 .set MR_r,     -80
@@ -152,6 +170,51 @@ menu_size: .quad M_SIZE
 2:  mov eax, 1
     ret
 3:  xor eax, eax
+    ret
+
+# .Lmenu_substr_ci(rdi=name cstr, rsi=filter, edx=flen) -> eax 1|0.
+# Case-insensitive ASCII substring match: the filter may appear anywhere in the
+# name, so "opus" finds "claude-opus-4-5".  An empty filter matches everything.
+.Lmenu_substr_ci:
+    test edx, edx
+    jz .Lmsc_yes
+    xor r10d, r10d               # name start offset
+.Lmsc_outer:
+    mov al, [rdi + r10]
+    test al, al
+    jz .Lmsc_no
+    mov r8, r10                  # name cursor
+    xor ecx, ecx                 # filter offset
+.Lmsc_inner:
+    cmp ecx, edx
+    jae .Lmsc_yes
+    mov al, [rdi + r8]
+    test al, al
+    jz .Lmsc_no
+    mov r9b, [rsi + rcx]
+    cmp al, 'A'
+    jb 1f
+    cmp al, 'Z'
+    ja 1f
+    add al, 0x20
+1:  cmp r9b, 'A'
+    jb 2f
+    cmp r9b, 'Z'
+    ja 2f
+    add r9b, 0x20
+2:  cmp al, r9b
+    jne .Lmsc_next
+    inc r8
+    inc ecx
+    jmp .Lmsc_inner
+.Lmsc_next:
+    inc r10d
+    jmp .Lmsc_outer
+.Lmsc_yes:
+    mov eax, 1
+    ret
+.Lmsc_no:
+    xor eax, eax
     ret
 
 # .Lmenu_streq(rdi, rsi) -> eax 1|0.
@@ -420,11 +483,91 @@ FN menu_sources_refresh
     mov [rip + .Lmenu_src_count], ebx
     EPILOGUE
 
+# ---------------------------------------------------------------- picker modes
+# menu_begin(esi=kind): select the picker kind and reset the modal state.  A
+# COMMAND begin hands control back to menu_update; MODEL/THINKING/PICK wait for
+# menu_rows to load their entries.
+FN menu_begin
+    mov [rip + .Lmenu_state + M_kind], esi
+    mov dword ptr [rip + .Lmenu_state + M_open], 0
+    mov dword ptr [rip + .Lmenu_state + M_dismissed], 0
+    mov dword ptr [rip + .Lmenu_state + M_flen], 0
+    mov dword ptr [rip + .Lmenu_state + M_filter], 0
+    mov dword ptr [rip + .Lmenu_state + M_count], 0
+    mov dword ptr [rip + .Lmenu_state + M_sel], 0
+    mov dword ptr [rip + .Lmenu_state + M_top], 0
+    mov dword ptr [rip + .Lmenu_state + M_all_count], 0
+    xor eax, eax
+    ret
+
+# menu_close(): dismiss the modal picker and return to COMMAND so the next
+# `/word` in the composer opens the command menu again.
+FN menu_close
+    mov dword ptr [rip + .Lmenu_state + M_open], 0
+    mov dword ptr [rip + .Lmenu_state + M_kind], MENU_KIND_COMMAND
+    xor eax, eax
+    ret
+
+# menu_kind() -> eax MENU_KIND_*
+FN menu_kind
+    mov eax, [rip + .Lmenu_state + M_kind]
+    ret
+
+# menu_is_modal() -> eax 1 when a non-COMMAND picker is open.
+FN menu_is_modal
+    cmp dword ptr [rip + .Lmenu_state + M_kind], MENU_KIND_COMMAND
+    je 1f
+    mov eax, [rip + .Lmenu_state + M_open]
+    ret
+1:  xor eax, eax
+    ret
+
+# menu_rows(rdi=names char**,  rsi=descs char**, edx=n, ecx=initial): load the
+# explicit rows for the current modal kind and rebuild the filtered view.  The
+# pointer arrays are copied; the strings stay caller-owned.
+FN menu_rows
+    PROLOGUE 0
+    mov rbx, rdi
+    mov r12, rsi
+    mov r13d, edx
+    test r13d, r13d
+    jns 1f
+    xor r13d, r13d
+1:  cmp r13d, MENU_STORE_MAX
+    jbe 2f
+    mov r13d, MENU_STORE_MAX
+2:  mov [rip + .Lmenu_state + M_all_count], r13d
+    xor r14d, r14d
+3:  cmp r14d, r13d
+    jae 4f
+    lea rax, [rip + .Lmenu_state + M_all_name]
+    mov rdx, [rbx + r14*8]
+    mov [rax + r14*8], rdx
+    lea rax, [rip + .Lmenu_state + M_all_desc]
+    mov rdx, [r12 + r14*8]
+    mov [rax + r14*8], rdx
+    inc r14d
+    jmp 3b
+4:  mov dword ptr [rip + .Lmenu_state + M_flen], 0
+    mov dword ptr [rip + .Lmenu_state + M_filter], 0
+    mov dword ptr [rip + .Lmenu_state + M_dismissed], 0
+    mov eax, ecx
+    test eax, eax
+    jns 5f
+    xor eax, eax
+5:  mov [rip + .Lmenu_state + M_sel], eax
+    mov dword ptr [rip + .Lmenu_state + M_top], 0
+    call .Lmu_build
+    xor eax, eax
+    EPILOGUE
+
 # menu_update(rdi=text, rsi=len): recompute open/filter/entries.  A non-menu
 # word closes the menu but deliberately leaves the last filter in place so that
 # backing a character out re-opens the same word without resetting the
 # selection or an Escape dismissal.
 FN menu_update
+    cmp dword ptr [rip + .Lmenu_state + M_kind], MENU_KIND_COMMAND
+    jne .Lmu_noop
     PROLOGUE 0
     mov rbx, rdi                   # text
     mov r12, rsi                   # len
@@ -458,14 +601,14 @@ FN menu_update
     cmp r13d, [rip + .Lmenu_state + M_flen]
     jne .Lmu_changed
     test r13, r13
-    jz .Lmu_build
+    jz .Lmu_build_call
     lea rdi, [rip + .Lmenu_state + M_filter]
     lea rsi, [rbx + 1]
     mov rdx, r13
     call memeq
     test eax, eax
     jz .Lmu_changed
-    jmp .Lmu_build
+    jmp .Lmu_build_call
 
 .Lmu_changed:
     mov [rip + .Lmenu_state + M_flen], r13d
@@ -478,9 +621,37 @@ FN menu_update
     mov dword ptr [rip + .Lmenu_state + M_top], 0
     mov dword ptr [rip + .Lmenu_state + M_dismissed], 0
 
+.Lmu_build_call:
+    call .Lmu_build
+    xor eax, eax
+    EPILOGUE
+
+.Lmu_close:
+    mov dword ptr [rip + .Lmenu_state + M_open], 0
+    # Clear the dismissal so an Esc that closed the menu never permanently
+    # suppresses reopening the same word.  The remembered filter is cleared
+    # too, so a later re-open of the same word starts from a clean slate.
+    mov dword ptr [rip + .Lmenu_state + M_dismissed], 0
+    mov dword ptr [rip + .Lmenu_state + M_flen], 0
+    xor eax, eax
+    EPILOGUE
+
+.Lmu_noop:
+    xor eax, eax
+    ret
+
+# .Lmu_build(): rebuild the filtered row pointers for the active kind.
+#   COMMAND -> .Lmenu_src_* filtered case-sensitively
+#   else    -> M_all_* filtered case-insensitively
+# Preserves r12-r15 (uses r13/r14 internally); returns no value.
 .Lmu_build:
+    push r13
+    push r14
+    push r15                       # pad to keep the stack 16-byte aligned
     xor r13d, r13d                 # filtered count
     xor r14d, r14d                 # source index
+    cmp dword ptr [rip + .Lmenu_state + M_kind], MENU_KIND_COMMAND
+    jne .Lmu_explicit
 .Lmu_loop:
     cmp r14d, [rip + .Lmenu_src_count]
     jae .Lmu_built
@@ -507,6 +678,32 @@ FN menu_update
 .Lmu_next:
     inc r14d
     jmp .Lmu_loop
+.Lmu_explicit:
+    cmp r14d, [rip + .Lmenu_state + M_all_count]
+    jae .Lmu_built
+    lea rax, [rip + .Lmenu_state + M_all_name]
+    mov rdi, [rax + r14*8]
+    test rdi, rdi
+    jz .Lmu_enext
+    lea rsi, [rip + .Lmenu_state + M_filter]
+    mov edx, [rip + .Lmenu_state + M_flen]
+    call .Lmenu_substr_ci
+    test eax, eax
+    jz .Lmu_enext
+    cmp r13d, MENU_STORE_MAX
+    jae .Lmu_enext
+    lea rax, [rip + .Lmenu_state + M_name]
+    lea rcx, [rip + .Lmenu_state + M_all_name]
+    mov rdx, [rcx + r14*8]
+    mov [rax + r13*8], rdx
+    lea rax, [rip + .Lmenu_state + M_desc]
+    lea rcx, [rip + .Lmenu_state + M_all_desc]
+    mov rdx, [rcx + r14*8]
+    mov [rax + r13*8], rdx
+    inc r13d
+.Lmu_enext:
+    inc r14d
+    jmp .Lmu_explicit
 .Lmu_built:
     mov [rip + .Lmenu_state + M_count], r13d
 
@@ -524,24 +721,27 @@ FN menu_update
     mov dword ptr [rip + .Lmenu_state + M_sel], 0
 .Lmu_selok:
     xor eax, eax
+    cmp dword ptr [rip + .Lmenu_state + M_kind], MENU_KIND_COMMAND
+    jne .Lmu_open_modal
     test r13d, r13d
+    jz .Lmu_setopen
+    cmp dword ptr [rip + .Lmenu_state + M_dismissed], 0
+    setz al
+    jmp .Lmu_setopen
+.Lmu_open_modal:
+    # A modal picker stays open while it has rows even when the filter
+    # matches nothing, so typing can keep narrowing without dropping the
+    # keystrokes back into the composer.
+    cmp dword ptr [rip + .Lmenu_state + M_all_count], 0
     jz .Lmu_setopen
     cmp dword ptr [rip + .Lmenu_state + M_dismissed], 0
     setz al
 .Lmu_setopen:
     mov [rip + .Lmenu_state + M_open], eax
-    xor eax, eax
-    EPILOGUE
-
-.Lmu_close:
-    mov dword ptr [rip + .Lmenu_state + M_open], 0
-    # Clear the dismissal so an Esc that closed the menu never permanently
-    # suppresses reopening the same word.  The remembered filter is cleared
-    # too, so a later re-open of the same word starts from a clean slate.
-    mov dword ptr [rip + .Lmenu_state + M_dismissed], 0
-    mov dword ptr [rip + .Lmenu_state + M_flen], 0
-    xor eax, eax
-    EPILOGUE
+    pop r15
+    pop r14
+    pop r13
+    ret
 
 # ---------------------------------------------------------------- accessors
 FN menu_open
@@ -604,6 +804,8 @@ FN menu_height
 FN menu_key
     cmp dword ptr [rip + .Lmenu_state + M_open], 0
     je .Lmk_no
+    cmp dword ptr [rip + .Lmenu_state + M_kind], MENU_KIND_COMMAND
+    jne .Lmk_modal
     cmp esi, .LK_UP
     je .Lmk_up
     cmp esi, .LK_DOWN
@@ -642,6 +844,97 @@ FN menu_key
     mov dword ptr [rip + .Lmenu_state + M_open], 0
     mov eax, 1
     ret
+
+# ---- modal picker keys ----------------------------------------------------
+# MODEL/THINKING/PICK: printable input edits the filter, Backspace deletes,
+# Up/Down/PageUp/PageDown move, Enter is consumed so the shell can apply the
+# selection, Esc closes and returns to COMMAND.
+.Lmk_modal:
+    cmp esi, .LK_UP
+    je .Lmkm_up
+    cmp esi, .LK_DOWN
+    je .Lmkm_down
+    cmp esi, .LK_PGUP
+    je .Lmkm_pgup
+    cmp esi, .LK_PGDN
+    je .Lmkm_pgdn
+    cmp esi, .LK_ESC
+    je .Lmkm_esc
+    cmp esi, .LK_BACKSPACE
+    je .Lmkm_back
+    cmp esi, .LK_ENTER
+    je .Lmk_yes
+    cmp edx, 0x20
+    jb .Lmk_no
+    cmp edx, 0x7f
+    je .Lmk_no
+    jmp .Lmkm_filter
+.Lmkm_up:
+    mov eax, [rip + .Lmenu_state + M_sel]
+    test eax, eax
+    jle .Lmk_yes
+    dec eax
+    mov [rip + .Lmenu_state + M_sel], eax
+    jmp .Lmk_yes
+.Lmkm_down:
+    mov eax, [rip + .Lmenu_state + M_sel]
+    inc eax
+    cmp eax, [rip + .Lmenu_state + M_count]
+    jge .Lmk_yes
+    mov [rip + .Lmenu_state + M_sel], eax
+    jmp .Lmk_yes
+.Lmkm_pgup:
+    mov eax, [rip + .Lmenu_state + M_sel]
+    sub eax, MENU_VISIBLE_MAX
+    jns 1f
+    xor eax, eax
+1:  mov [rip + .Lmenu_state + M_sel], eax
+    jmp .Lmk_yes
+.Lmkm_pgdn:
+    mov eax, [rip + .Lmenu_state + M_sel]
+    add eax, MENU_VISIBLE_MAX
+    mov ecx, [rip + .Lmenu_state + M_count]
+    dec ecx
+    js 1f
+    cmp eax, ecx
+    jle 1f
+    mov eax, ecx
+1:  test eax, eax
+    jns 2f
+    xor eax, eax
+2:  mov [rip + .Lmenu_state + M_sel], eax
+    jmp .Lmk_yes
+.Lmkm_esc:
+    mov dword ptr [rip + .Lmenu_state + M_dismissed], 1
+    mov dword ptr [rip + .Lmenu_state + M_open], 0
+    mov dword ptr [rip + .Lmenu_state + M_kind], MENU_KIND_COMMAND
+    mov eax, 1
+    ret
+.Lmkm_back:
+    mov eax, [rip + .Lmenu_state + M_flen]
+    test eax, eax
+    jz .Lmk_yes
+    dec eax
+    mov [rip + .Lmenu_state + M_flen], eax
+    lea rcx, [rip + .Lmenu_state + M_filter]
+    mov byte ptr [rcx + rax], 0
+    sub rsp, 8
+    call .Lmu_build
+    add rsp, 8
+    jmp .Lmk_yes
+.Lmkm_filter:
+    mov eax, [rip + .Lmenu_state + M_flen]
+    cmp eax, MENU_FILTER_MAX
+    jae .Lmk_yes
+    lea rcx, [rip + .Lmenu_state + M_filter]
+    mov [rcx + rax], dl
+    inc eax
+    mov [rip + .Lmenu_state + M_flen], eax
+    mov byte ptr [rcx + rax], 0
+    sub rsp, 8
+    call .Lmu_build
+    add rsp, 8
+    jmp .Lmk_yes
 
 # menu_name(edi=index) -> rax ptr, rdx len (0,0 when out of range).
 FN menu_name
@@ -775,7 +1068,10 @@ FN menu_render
     mov r10d, .LA_REVERSE
 1:  mov [rbp + MR_attrs], r10d
 
-    # "/" at (x, yy).
+    # Command rows render "/name"; the modal pickers render "name".
+    mov [rbp + MR_nx], r12d
+    cmp dword ptr [rip + .Lmenu_state + M_kind], MENU_KIND_COMMAND
+    jne .Lmr_noslash
     mov rdi, rbx
     mov esi, r12d
     mov edx, [rbp + MR_yy]
@@ -787,10 +1083,14 @@ FN menu_render
     mov [rsp], rax
     call grid_put
     add rsp, 16
-
-    # Name at x+1, clipped to w-1 columns.
+    inc dword ptr [rbp + MR_nx]
+.Lmr_noslash:
+    # Name at MR_nx, clipped to the row width (w-1 for the slash + name).
     mov eax, r14d
+    cmp dword ptr [rip + .Lmenu_state + M_kind], MENU_KIND_COMMAND
+    jne 1f
     dec eax
+1:  test eax, eax
     jle .Lmr_desc
     mov [rbp + MR_col], eax
     lea rcx, [rip + .Lmenu_state + M_name]
@@ -799,12 +1099,11 @@ FN menu_render
     mov [rbp + MR_nptr], rdi
     call .Lmenu_strlen
     cmp eax, [rbp + MR_col]
-    jbe 1f
+    jbe 2f
     mov eax, [rbp + MR_col]
-1:  mov [rbp + MR_nlen], eax
+2:  mov [rbp + MR_nlen], eax
     mov rdi, rbx
-    mov esi, r12d
-    inc esi
+    mov esi, [rbp + MR_nx]
     mov edx, [rbp + MR_yy]
     mov ecx, [rbp + MR_fg]
     xor r8d, r8d
