@@ -46,6 +46,7 @@ cfg_trust_asked: .quad 0        # process-lifetime: the trust prompt runs at mos
 .Lproj_name:     .asciz "/.opcode/config.jsonc"
 .Lsession_key:   .asciz "session_dir"
 .Lthinking_key:  .asciz "default_thinking"
+.Lopenai_cv_key: .asciz "openai_client_version"
 .Ltheme_key:     .asciz "theme"
 .Ltrusted_key:   .asciz "trusted"
 .Lproviders_dot: .asciz "providers."
@@ -401,6 +402,13 @@ FN config_session_dir
 # agent_thinking_parse; the CLI --thinking flag wins over this value.
 FN config_default_thinking
     lea rdi, [rip + .Lthinking_key]
+    jmp config_str
+
+# config_openai_client_version() -> mem_alloc'd cstr | 0.  The configured
+# `openai_client_version` (agentc's key); the discovery seat publishes it to the
+# Codex/Responses /models probe.  Absent -> 0 (the caller supplies a default).
+FN config_openai_client_version
+    lea rdi, [rip + .Lopenai_cv_key]
     jmp config_str
 
 # config_default_theme() -> mem_alloc'd cstr | 0.  The configured `theme` name

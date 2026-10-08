@@ -221,6 +221,7 @@ config_provider_base(provider cstr) -> cstr|0
 config_api_key(provider cstr) -> cstr|0
 config_session_dir() -> cstr|0
 config_default_theme() -> cstr|0   # "theme" name; CLI --theme wins
+config_openai_client_version() -> cstr|0   # "openai_client_version" (Codex probe)
 config_trusted(cwd cstr) -> 1|0    # g_config_approve, else trust.jsonc entry
 config_trust_save(cwd cstr) -> 0   # append cwd to <config>/trust.jsonc
 config_trust_ask(cwd cstr) -> 1|0  # interactive TUI prompt, once per process:
@@ -294,10 +295,20 @@ trusted (`--approve`, the interactive prompt, or `trust.jsonc`).
 
 ```
 g_agent_session: .quad     # Session* set by the app (0 = no persistence)
+agent_load_session(path cstr) -> 0 | -errno   # in-TUI /resume
 ```
 `agent_run`: when a session is set, `session_load` first, then append every user /
 assistant / tool_result message as it is added; on the first turn of a fresh session
 append `model_change` with the resolved provider/model.
+
+`agent_load_session` loads a stored session file into the running agent. It opens
+the file for append (`session_open`), replays it into a scratch transcript
+(`session_load`, so `thinking` blocks are skipped as on startup), then replaces the
+live transcript and rebinds `g_agent_session` to the file (closing the old one). A
+refused or corrupt file (e.g. the schema gate) leaves the running agent and its old
+transcript intact and returns the negative errno. The caller must abort any
+in-flight run first; this routine never touches a run. It does not change the
+resolved model/provider — the front end owns that decision.
 
 ---
 
@@ -333,7 +344,7 @@ in `esi`. `agent_thinking_name`/`agent_set_thinking` clamp out-of-range values
   invalid value is a usage error (exit 2).
 - Config: `default_thinking` in `<config>/config.jsonc`, read through
   `config_default_thinking() -> cstr|0`. The CLI flag wins; with neither the
-  value stays `off`.
+  value is `medium` (agentc parity), not `off`.
 - `agent_init` applies `config_default_thinking()` only when `g_agent_thinking`
   is still -1.
 

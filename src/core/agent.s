@@ -2463,12 +2463,12 @@ FN agent_init
     mov [rip + a_rep_len], rax
     mov qword ptr [rip + a_rep_off], 6
 18: # thinking: the --thinking flag already stored 0..3; otherwise apply the
-    # config default_thinking, else leave the default off
+    # config default_thinking, else default to medium (agentc parity)
     cmp dword ptr [rip + g_agent_thinking], 0
     jge 19f
     call config_default_thinking
     test rax, rax
-    jz 19f
+    jz .Lar_th_default
     mov rbx, rax
     mov rdi, rax
     call agent_thinking_parse
@@ -2476,8 +2476,12 @@ FN agent_init
     mov rdi, rbx
     call mem_free
     test r12d, r12d
-    js 19f
+    js .Lar_th_default
     mov esi, r12d
+    call agent_set_thinking
+    jmp 19f
+.Lar_th_default:
+    mov esi, TH_MEDIUM
     call agent_set_thinking
 19:
 7:  xor eax, eax
@@ -2552,6 +2556,90 @@ FN agent_reset_session
     EPILOGUE
 .Lars_err:
     mov rax, -EIO
+    EPILOGUE
+
+# ---------------------------------------------------------------------------
+# agent_load_session(path cstr) -> 0 | -errno
+# Load a stored session into the running agent: replace the live transcript
+# (thinking blocks are skipped by session_load, exactly as on startup) and
+# rebind g_agent_session to that file.  The caller owns aborting any in-flight
+# run; this routine never touches a run and never fails it.  The transcript is
+# staged off to the side first, so a refused/corrupt file leaves the running
+# agent (and its old transcript) intact.
+FN agent_load_session
+    PROLOGUE 48
+    test rdi, rdi
+    jz .Lals_einval
+    cmp byte ptr [rdi], 0
+    je .Lals_einval
+    mov r12, rdi                     # path
+    call session_open
+    test rax, rax
+    jz .Lals_noent
+    mov r13, rax                     # replacement Session
+    # stage the loaded transcript in a scratch Transcript
+    lea rdi, [rsp]
+    call tr_init
+    mov rdi, r13
+    lea rsi, [rsp]
+    call session_load
+    test rax, rax
+    js .Lals_load_fail
+    # capture the staged VEC containers before the swap
+    mov rax, [rsp + TR_msgs]
+    mov [rsp + 16], rax
+    mov rax, [rsp + TR_owned]
+    mov [rsp + 24], rax
+    # drop the old transcript and make a_tr current again (tr_init sets
+    # g_tr_cur); the scratch transcript becomes unreferenced
+    lea rdi, [rip + a_tr]
+    call tr_free
+    lea rdi, [rip + a_tr]
+    call tr_init
+    # tr_init allocated fresh empty VECs: release them and install the staged
+    # ones so a_tr owns the loaded messages with g_tr_cur == &a_tr
+    mov rdi, [rip + a_tr + TR_msgs]
+    call vec_free
+    mov rdi, [rip + a_tr + TR_msgs]
+    call mem_free
+    mov rdi, [rip + a_tr + TR_owned]
+    call vec_free
+    mov rdi, [rip + a_tr + TR_owned]
+    call mem_free
+    mov rax, [rsp + 16]
+    mov [rip + a_tr + TR_msgs], rax
+    mov rax, [rsp + 24]
+    mov [rip + a_tr + TR_owned], rax
+    # rebind persistence, then close the previous session
+    mov r14, [rip + g_agent_session]
+    mov [rip + g_agent_session], r13
+    mov rdi, r14
+    call session_close
+    xor eax, eax
+    EPILOGUE
+.Lals_load_fail:
+    mov r14, rax                     # e.g. -EPERM from the schema gate
+    lea rdi, [rsp]
+    call tr_free                     # frees the staged messages, clears g_tr_cur
+    call ag_restore_tr_cur           # make the old a_tr current again
+    lea rdi, [rip + a_tr]
+    call tr_len
+    test rax, rax
+    jnz 1f
+    # the old transcript was empty: rebuild it so g_tr_cur points at a_tr
+    lea rdi, [rip + a_tr]
+    call tr_free
+    lea rdi, [rip + a_tr]
+    call tr_init
+1:  mov rdi, r13
+    call session_close
+    mov rax, r14
+    EPILOGUE
+.Lals_noent:
+    mov rax, -ENOENT
+    EPILOGUE
+.Lals_einval:
+    mov rax, -EINVAL
     EPILOGUE
 
 # ---------------------------------------------------------------------------

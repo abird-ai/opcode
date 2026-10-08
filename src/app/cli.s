@@ -72,7 +72,7 @@
     .ascii "  [--no-session] [--template NAME [args...]] [--approve]\n"
     .ascii "  [--tui-mode scrollback|inline|fullscreen|auto] [--theme NAME]\n"
     .ascii "  [--headless WxH] [--headless-capture FILE] [--script FILE]\n"
-    .ascii "  [--thinking off|low|medium|high]\n"
+    .ascii "  [--thinking off|low|medium|high] (default medium)\n"
     .asciz "one-shot: opcode -p PROMPT | JSONL: opcode --mode json|rpc | help: opcode --help\n"
 
 .Lf_provider:   .asciz "--provider"
