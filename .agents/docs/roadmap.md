@@ -18,12 +18,12 @@ selected at link time.
 | `plat/` Linux riscv64 | no sources yet — the target is gated closed |
 | `net/`, TLS | implemented — raw sockets, own DNS resolver, freestanding mbedTLS as the TLS backend on every target |
 | `wire/` | implemented — URL, HTTP/1.1, SSE, JSON writer, `FWIR1` record/replay |
-| `core/` | implemented — agent loop, transcript/messages, prompt builder, tool registry, sessions, config, auth, compaction, diff, catalog |
+| `core/` | implemented — agent loop, transcript/messages, prompt builder, tool registry, sessions (new/continue/resume/list), config, auth, OAuth login/logout including the `--manual` paste flow, compaction, diff, catalog, and the 24 h discovered-model cache (`models-cache.jsonc`) behind `--list-models`/`--refresh-models`/`--offline` |
 | `prov/` | implemented — Anthropic Messages, OpenAI Chat/Responses, Ollama, ollama-cloud, Google |
 | `tools/` | implemented — `read`, `bash`, `edit`, `write`, `ls`, `find`, `grep` |
-| `tui/` | implemented — terminal lifecycle, cell renderer, input parser, editor, view buffer, markdown-lite, inline and fullscreen modes, headless script runner |
+| `tui/` | implemented — terminal lifecycle, cell renderer, input parser, editor, view buffer, markdown-lite, inline and fullscreen modes, headless script runner, slash-command menu with MODEL/THINKING modal pickers, and the standalone `opcode_pick_tty` session picker |
 | `ext/` | static C plugins implemented (ABI header, host vtable, static loader, example plugin, plugin test; plugin commands are dispatched and listed in the slash menu, prompt `snippet`/`guidelines` and `resources_discover` roots are wired); stdio MCP client implemented (tools only, `result.isError` mapped, SIGTERM→bounded reap→SIGKILL shutdown). Runtime plugin loading and the rest of the host vtable are the remaining pieces |
-| `app/` | implemented — TUI/print/JSON/RPC modes, subcommands, flags |
+| `app/` | implemented — TUI/print/JSON/RPC modes, subcommands and flags, including `login --manual`/`logout`, `--list-models [filter]`, `--refresh-models`, `--offline`, and the `--resume` session picker (`--continue` = newest) |
 
 Remaining work is limited to genuinely unimplemented items: runtime plugin
 loading and the host-vtable gaps (hook-bus event dispatch, plugin prompt

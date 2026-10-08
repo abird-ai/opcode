@@ -204,11 +204,18 @@ The TUI installs `g_agent_ui_fn` and translates events:
   `/help`, `/model [id]`, `/theme [dark|light|<name>]`,
   `/thinking [off|low|medium|high]`, `/compact`) then `/skill:<name> [args]`,
   prompt-template names and plugin/extension commands; otherwise append the user
-  block, `editor_history_append` and `agent_submit`.
+  block, `editor_history_append` and `agent_submit`. `/model` with no argument
+  opens the modal MODEL picker and `/thinking` with no argument opens the modal
+  THINKING picker (§11); a selecting Enter is passed back through the same
+  command handlers.
 - The slash-command menu (`src/tui/menu.s`) opens on a leading `/` word, filters
   by prefix, and lists the built-ins `clear help model new quit theme thinking
   compact`, then prompt-template names, skill names as `skill:<name>` and
-  extension commands when `opcode_host_command_count` is non-zero. The selected
+  extension commands when `opcode_host_command_count` is non-zero. The same
+  module now backs four kinds selected with `menu_begin(kind)` and
+  `menu_rows(names, descs, n, initial)`: COMMAND (this slash menu) plus the modal
+  MODEL and THINKING (app-supplied rows, filtered case-insensitively) and PICK
+  (the standalone pre-TUI list). The selected
   row is reverse-video; the menu sits above the composer in fullscreen and below
   it inline (between the composer and the footer).
 - `Esc` aborts the current run and returns queued input to the editor; `Ctrl+C`
@@ -261,3 +268,30 @@ the 6x6x6 cube with the near-neutral dark greyscale-ramp special case, else the
 16 ANSI colours (muted pinned to index 8). All SGR fg/bg emission in the
 fullscreen and inline paths goes through `theme_emit_fg`/`theme_emit_bg`;
 `TH_NO_BG` is emitted as `SGR 49`.
+
+## 11. Pickers (`src/tui/menu.s`, `src/tui/pick.s`)
+
+The menu state machine is shared by four kinds (`menu_begin`, `menu_rows`,
+`menu_key`, `menu_render`): the text-driven COMMAND slash menu and the three
+modal pickers MODEL, THINKING and PICK. The modal rows are `(name, description)`
+pairs supplied by the caller; typing filters them case-insensitively, Up/Down
+and PageUp/PageDown move, Enter selects and Esc cancels.
+
+- **Model picker** (`/model` with no argument, `src/app/tui.s`): builds the
+  current provider's rows from the built-in + discovered catalog, each
+  described by `(current) <provider> ctx=<n> reasoning image`, with the current
+  model as the initial selection. Enter routes the row back through
+  `tui_cmd_model` → `agent_set_model`. With no catalog it reports the current
+  model instead of opening.
+- **Thinking picker** (`/thinking` with no argument): the four levels
+  `off|low|medium|high`, with the active level as the initial selection; Enter
+  applies via `agent_set_thinking`.
+- **Standalone picker** (`src/tui/pick.s`): `opcode_pick(title, names, descs, n,
+  initial) -> index | -1` reuses the same grid, renderer, input parser and list
+  chrome over an already-open terminal. `opcode_pick_tty` is the convenience
+  wrapper that opens the controlling tty, enters raw + alternate-screen mode via
+  `term_init`, runs the core and restores. The `--resume` flow in `src/app/cli.s`
+  calls it (weakly linked) over the cwd's sessions, newest first, before the TUI
+  starts; a non-TTY run falls back to the newest session. Headless tests drive
+  it through `g_pick_read` (in-memory keys) and the in-memory grid, and it
+  returns `-1` rather than blocking when headless and unconfigured.

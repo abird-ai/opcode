@@ -191,6 +191,20 @@ resolves the provider base URL, GETs `<base>/models` (or the Ollama native
 rewrites `<config dir>/models.jsonc`, which `catalog_load_user()` reads at
 startup. See `.agents/docs/design-decisions.md` for the catalog's provenance.
 
+Successful probes also append a `{provider, base, fetched, count}` entry to
+`<config dir>/models-cache.jsonc` (one JSON object per line; the newest matching
+entry wins). `discover_models_cached(provider, verbose, force)`
+(`src/core/discover.s`) reuses that entry while `now - fetched < 24 h`
+(`DISC_TTL_MS`), unless `force` is set. `--refresh-models` forces discovery for
+the resolved or all configured providers and ignores the fresh cache;
+`--offline` never probes and falls back to the cached count. A probe failure is
+never fatal: the cached count is returned. The top-level `--list-models [FILTER]`
+(`src/app/models.s`) discovers the resolved provider (cache first unless
+`--refresh-models`), loads the user catalog, and prints the deduplicated
+built-in + discovered set as `provider/id (builtin|discovered)`, optionally
+filtered by a substring of provider/id/name, then exits without starting the
+agent.
+
 ## 5. Tools
 
 ### 5.1 Registry
@@ -438,13 +452,24 @@ Automatic refresh-grant exchange is a deliberate non-goal for now
 skew window). `agent.s` sends `Authorization: Bearer` plus
 `anthropic-beta: oauth-2025-04-20` for Anthropic subscription tokens.
 
-`opcode login [provider]` / `opcode logout` (`src/app/login.s`,
+`opcode login [provider]` / `opcode logout [provider]` (`src/app/login.s`,
 `src/core/oauth.s`) implement authorization code + PKCE S256 with the
 provider's fixed loopback redirect port (Anthropic 53692, OpenAI 1455) on both
 `::1` and `127.0.0.1` (never a wildcard address), validate `state`, exchange
 the code over the normal fetch/TLS path, and store the tokens in
 `<config dir>/auth.jsonc` (0600, atomic rewrite). Tokens are served until
 expiry; `--no-browser` prints the URL instead of opening it.
+
+`--manual` (alias `--paste`) selects `oauth_login_manual()`: the same PKCE /
+state / token machinery without a loopback listener. It prints the authorize
+URL, reads one pasted line from stdin (a bare code, `code#state`, a query string
+or the full redirect URL) and completes the exchange; it is meant for
+remote/headless hosts. On success either flow sets `default_provider` in the
+user config (merging, not rewriting other keys) and prints `default provider
+set to <p>` — or a note if the config could not be written. `logout` removes the
+provider's stored `oauth` credential **and** its stored `api_key` (dropping the
+provider object when nothing else remains), printing `removed stored credential
+for <p>`.
 
 ## 9. Sessions and compaction
 
@@ -456,8 +481,12 @@ expiry; `--no-browser` prints the URL instead of opening it.
 header `{"type":"session","schema_version":1,...}`, then `message`,
 `model_change`, `custom`, `compaction` entries. Keys are snake_case, tagged
 enums, timestamps are Unix milliseconds, `id`/`parent_id` form a linear chain.
-Appends are fsynced on message lines. `--continue` / `--resume` open the newest
-session for the cwd; `--session PATH|ID` opens a specific one; `--no-session`
+Appends are fsynced on message lines. `--continue` opens the newest session for
+the cwd. `--resume` with no explicit `--session` opens the pre-TUI session
+picker on a TTY (`opcode_pick_tty`, newest first, each row described by the
+first user message or summary) and loads the selected session; a non-TTY
+`--resume` falls back to the newest session. `--session PATH|ID` opens a specific
+one; `--no-session`
 disables persistence; `--list-sessions` prints `<id> <timestamp_ms> <path>` for
 the cwd's sessions, newest first (`session_list`). On load, a missing
 `schema_version` is treated as
@@ -487,8 +516,9 @@ custom entry is recorded. Both constants are compile-time defaults
 | `--mode json` | JSONL of the agent events on stdout |
 | `--mode rpc` | JSONL commands in / responses + events out; commands `prompt`, `abort`, `quit` |
 
-Subcommands: `opcode login|logout [provider]`, `opcode models [--refresh]
-[--provider P]`, `opcode fetch URL`, `opcode update [--check] [--offline]`
+Subcommands: `opcode login|logout [provider]` (`login` takes `--manual`/
+`--paste`), `opcode models [--refresh] [--provider P]`, `opcode fetch URL`,
+`opcode update [--check] [--offline]`
 (checks `https://api.github.com/repos/abird-ai/opcode/releases/latest`).
 
 The five TLS/HTTP request paths share `src/wire/http_client.s`: fetch,
@@ -504,14 +534,17 @@ the provider SSE adapters stay separate.
 Flags accepted by all agent front ends (the parser, usage renderer and
 session resolver are shared in `src/app/cli.s`): `--provider`, `--model`,
 `--api-key`, `--base-url`, `--system`, `--replay FILE`, `--max-tokens`,
-`--offline`, `--continue`, `--resume`, `--session`, `--session-dir`,
-`--no-session`, `--template NAME [args...]`, `--approve`, `--verbose`.
+`--offline`, `--refresh-models`, `--continue`, `--resume`, `--session`,
+`--session-dir`, `--no-session`, `--template NAME [args...]`, `--approve`,
+`--verbose`.
 `--verbose` raises the log gate to `LOG_DEBUG` and emits request/response/tool
 diagnostics from `agent.s`. The TUI additionally accepts `--headless WxH`,
 `--script FILE`, `--tui-mode inline|fullscreen` and `--headless-capture FILE`;
 the modes front ends accept `--mode json|rpc`
-and `-p`/`--print`. `--version`/`--help` and `--list-sessions` (list the cwd's
-sessions newest first, then exit) are handled by top-level dispatch.
+and `-p`/`--print`. `--version`/`--help`, `--list-sessions` (list the cwd's
+sessions newest first, then exit) and `--list-models [FILTER]` (list built-in +
+discovered models, then exit; `--refresh-models`/`--offline`/`--provider`/`--base-url`
+are honoured) are handled by top-level dispatch.
 `opcode fetch` additionally takes `--method`, `--header`,
 `--data`, `--record FILE`, `--dump-wire` and `--insecure`; `--record` is
 `fetch`-only (the agent front ends take `--replay FILE` only) and both use the

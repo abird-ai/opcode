@@ -4,13 +4,11 @@ A minimal, extensible coding agent written in **hand-written x86-64 assembly** �
 static, no libc, Linux-first, with a linux-aarch64 port, a macOS arm64 port and a
 Windows x86-64 port.
 
-> **Research project.** `opcode` is a *research* project, not production
-> software. It exists to push one extreme idea as far as it will go: a real
-> coding agent in hand-written assembly, statically linked and libc-free. If you
-> want a coding agent for real work, use
-> **[agentc](https://github.com/abird-ai/agentc)** — the production sibling, in
-> freestanding C23, with the same feature surface and a supported release. The
-> two share a design; `opcode` is the far end of the experiment.
+> **For production use, pick [agentc](https://github.com/abird-ai/agentc).**
+> `opcode` is a **research project** — the far end of one experiment: a real
+> coding agent in hand-written x86-64 assembly, statically linked and libc-free.
+> `agentc` is the supported production sibling (freestanding C23, the same
+> feature surface, real releases) — use it for anything you actually depend on.
 
 - **~0.2 ms** to launch, **~0.5 MB** resident in the TUI, **~706 KiB** static
   binary — no runtime, no interpreter, no GC, no dynamic linker.
@@ -136,9 +134,12 @@ link in statically (see [Extensions](#mcp-and-extensions)).
 ./build/opcode -p "explain this project"  # one-shot: run and print the answer
 ./build/opcode --mode json -p "hi"        # machine-readable JSONL events
 ./build/opcode --mode rpc                 # JSONL commands in, events out
-./build/opcode login anthropic            # OAuth subscription login (login|logout)
+./build/opcode login [provider] [--manual] # OAuth subscription login; --manual pastes a code
+./build/opcode --list-models [filter]     # list known models, then exit
+./build/opcode --refresh-models           # force model discovery (ignores the 24 h cache)
 ./build/opcode models --refresh           # refresh and list available models
 ./build/opcode --list-sessions            # list this directory's sessions, then exit
+./build/opcode --resume                   # pick a session to resume (newest first)
 ./build/opcode --verbose                  # same TUI, with request/tool diagnostics on stderr
 ./build/opcode fetch https://example.com/ # minimal HTTP(S) client
 ./build/opcode update                     # check for a newer release
@@ -159,14 +160,20 @@ environment variable or `auth.jsonc`); Google uses
   `providers.<id>.base_url`.
 - **Discovery:** `opcode models --refresh` probes the configured endpoint (and
   Ollama's `/api/tags`) and writes `<config>/models.jsonc`; credentials live in
-  `<config>/auth.jsonc` (0600).
+  `<config>/auth.jsonc` (0600). Successful probes also record a `fetched`
+  timestamp in `<config>/models-cache.jsonc`, reused for 24 h; `--list-models`
+  reuses a fresh cache, `--refresh-models` ignores it, and `--offline` disables
+  the network probes (a cache miss is never fatal).
 - **Auth precedence:** `--api-key` › stored OAuth credential › `auth.jsonc`
   api_key › provider environment variable › config `api_keys`. A stored OAuth
   login owns its provider: an expired token is an error, never a silent fallback
   to an ambient key.
 - **OAuth subscription logins:** `opcode login [anthropic|openai]` uses an
   authorization-code + PKCE S256 flow with a loopback-only callback and an
-  atomic 0600 token store; `opcode logout [provider]` clears it.
+  atomic 0600 token store; `--manual` (alias `--paste`) instead prints the
+  authorize URL and reads a pasted code, for remote/headless use. On success the
+  provider becomes `default_provider`. `opcode logout [provider]` removes the
+  stored OAuth credential and clears the provider's stored api_key.
 
 ## MCP and extensions
 
@@ -200,6 +207,13 @@ tools, custom providers or dynamic loading) are documented in
 - Slash commands: `/model [id]`, `/thinking`, `/theme [dark|light|<name>]`,
   `/compact`, `/skill:<name>`, any registered prompt template, plugin extension
   commands, `/clear`, `/new`, `/quit`, `/help`.
+- **Pickers:** `/model` with no argument opens a modal, type-to-filter list of
+  the current provider's models (context window, reasoning/image flags, and
+  `(current)`); `/thinking` with no argument opens the filtered
+  `off|low|medium|high` list. Up/Down move, Enter selects, Esc cancels.
+  `--resume` opens the same picker over this directory's sessions, newest
+  first, before the TUI starts; `--continue` stays a shorthand for the newest
+  session.
 - **TUI modes:** `inline` (default) owns a fixed region at the bottom and keeps
   finished transcript blocks in the terminal's own scrollback; `scrollback` is
   the append-only renderer; `fullscreen` uses the alternate screen; `--tui-mode
