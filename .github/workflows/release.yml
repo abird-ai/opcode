@@ -125,13 +125,14 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
           prerelease=()
           case "$TAG" in *-*) prerelease=(--prerelease) ;; esac
-          if gh release view "$TAG" > /dev/null 2>&1; then
-            gh release upload "$TAG" artifacts/opcode-* artifacts/SHA256SUMS --clobber
+          if gh release view "$TAG" --repo "$REPO" > /dev/null 2>&1; then
+            gh release upload "$TAG" artifacts/opcode-* artifacts/SHA256SUMS --clobber --repo "$REPO"
           else
             gh release create "$TAG" artifacts/opcode-* artifacts/SHA256SUMS \
-              "${prerelease[@]}" --title "opcode $GITHUB_REF_NAME" --generate-notes
+              "${prerelease[@]}" --title "opcode $GITHUB_REF_NAME" --generate-notes --repo "$REPO"
           fi
