@@ -1,0 +1,9 @@
+build/
+*.o
+*.tmp
+__pycache__/
+*.pyc
+result
+/result-*
+.agents/runs/
+.orchestrator/

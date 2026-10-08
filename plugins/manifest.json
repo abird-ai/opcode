@@ -1,0 +1,8 @@
+{
+  "plugins": [
+    {
+      "name": "example_c",
+      "sources": ["plugins/example_c/plugin.c"]
+    }
+  ]
+}

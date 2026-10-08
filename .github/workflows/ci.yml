@@ -1,0 +1,119 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: build and test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@v30
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+
+      - name: Nix package
+        run: nix build .#default --print-build-logs
+
+      - name: Unit test binaries
+        run: make -j test
+
+      # Headless-safe: the suite skips the network/python integration suites
+      # when python3 is missing and never needs a TTY.
+      - name: Full suite
+        run: tests/run.sh
+
+  linux-aarch64:
+    name: build and test linux-aarch64 with QEMU
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@v30
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+
+      - name: Build linux-aarch64
+        run: nix build .#linux-aarch64 --print-build-logs
+
+      - name: Full suite under QEMU
+        run: |
+          set -euo pipefail
+          nix develop --command sh -c \
+            'OPCODE_TARGET=linux-aarch64 EMULATOR=qemu-aarch64 make -j$NIX_BUILD_CORES test-qemu'
+
+  windows:
+    name: build and verify windows-x86_64 under Wine
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@v30
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+
+      # The devShell carries the mingw-w64 cross toolchain and wine64; the
+      # lane builds the PE, runs the unit binaries and the CLI checks under
+      # Wine, then the integration subset (documented divergences are listed).
+      - name: Build and run the Wine subset
+        run: |
+          set -euo pipefail
+          nix develop --command sh -c \
+            'make -j$NIX_BUILD_CORES test-wine'
+
+  macos:
+    name: build and test (macos-14)
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@v30
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+
+      # The flake exposes packages.aarch64-darwin.darwin-arm64: the Mach-O
+      # recipe from the Makefile, packaged for a darwin host with no cross
+      # toolchain (see flake.nix).
+      - name: Nix package (darwin-arm64)
+        run: nix build .#darwin-arm64 --print-build-logs
+
+      # Layer-0 proof: the smoke program exercises the XNU syscall shim before
+      # the full suite runs against the same binary.
+      - name: Build and run Layer-0 smoke binary
+        run: |
+          make -j4 darwin-arm64-smoke
+          ./build/smoke-darwin-arm64
+
+      # tests/run.sh builds the Mach-O target and the unit binaries
+      # natively (arm64) and runs the full suite with no skips. The job fails
+      # if any unit test, CLI check, or integration check fails; `set -o
+      # pipefail` propagates a suite failure and the raw log is uploaded below.
+      - name: Full suite
+        shell: bash
+        run: |
+          set -o pipefail
+          tests/run.sh 2>&1 | tee tests-macos.log
+
+      - name: Upload raw test log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tests-macos-log
+          path: tests-macos.log
+          if-no-files-found: ignore

@@ -1,0 +1,135 @@
+name: Build binaries
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build release binaries
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      # The Linux cross targets are built from this one Linux runner by Nix.
+      # Gated targets are skipped inside `release-all` with a ::notice:: (and
+      # recorded in SKIPPED), so a closed port gate never fails the job. The
+      # darwin-arm64 target is host-native: it is built and tested by the
+      # macos-14 job below, never cross-built here.
+      - name: Install Nix
+        uses: cachix/install-nix-action@v30
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+
+      - name: Build and verify linux-aarch64 under QEMU
+        timeout-minutes: 45
+        run: |
+          set -euo pipefail
+          nix develop --command sh -c \
+            'OPCODE_TARGET=linux-aarch64 EMULATOR=qemu-aarch64 make -j$NIX_BUILD_CORES test-qemu'
+
+      - name: Build and verify windows-x86_64 under Wine
+        timeout-minutes: 45
+        run: |
+          set -euo pipefail
+          nix develop --command sh -c \
+            'make -j$NIX_BUILD_CORES test-wine'
+
+      - name: Build every release binary
+        run: nix build .#release-all --out-link result-release --print-build-logs
+
+      - name: Materialize artifact directory
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          cp -L result-release/opcode-* result-release/SHA256SUMS artifacts/
+          cat result-release/SKIPPED
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: opcode-binaries
+          path: artifacts/
+          if-no-files-found: error
+
+  darwin-arm64:
+    name: Build opcode-darwin-arm64 (macos-14)
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      # Built with the runner's own clang from this repository's sources, like
+      # any macOS developer would; the release artifact below is the exact
+      # binary the suite runs against.
+      - name: Build Mach-O arm64
+        run: make -j4 darwin-arm64
+
+      - name: Build and run Layer-0 smoke binary
+        run: |
+          make -j4 darwin-arm64-smoke
+          ./build/smoke-darwin-arm64
+
+      # A failing suite fails the job, so the upload below is unreachable and
+      # nothing is published from a red macOS runner. tests/run.sh builds and
+      # runs the arm64 unit binaries and the integration checks.
+      - name: Full test suite
+        run: tests/run.sh
+
+      - name: Materialize artifact
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          cp -L build/opcode-darwin-arm64 artifacts/opcode-darwin-arm64
+
+      - name: Upload opcode-darwin-arm64
+        uses: actions/upload-artifact@v4
+        with:
+          name: opcode-darwin-arm64
+          path: artifacts/opcode-darwin-arm64
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub Release
+    needs: [build, darwin-arm64]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Download Linux artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: opcode-binaries
+          path: artifacts
+
+      - name: Download darwin artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: opcode-darwin-arm64
+          path: artifacts
+
+      - name: Merge checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          (cd artifacts && sha256sum opcode-darwin-arm64 >> SHA256SUMS)
+
+      - name: Attach to release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          prerelease=()
+          case "$TAG" in *-*) prerelease=(--prerelease) ;; esac
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            gh release upload "$TAG" artifacts/opcode-* artifacts/SHA256SUMS --clobber
+          else
+            gh release create "$TAG" artifacts/opcode-* artifacts/SHA256SUMS \
+              "${prerelease[@]}" --title "opcode $GITHUB_REF_NAME" --generate-notes
+          fi
