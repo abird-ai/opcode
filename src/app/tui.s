@@ -20,6 +20,12 @@
 .equ IG_cells, 8
 .equ IG_CELL,  24
 .equ IG_CELL_CONT, 0xFFFFFFFF
+# Cell field offsets (src/tui/render.s), for the inline scrollbar overlay.
+.equ IG_Ccp,    0
+.equ IG_Ccomb,  4
+.equ IG_Cfg,    8
+.equ IG_Cbg,    12
+.equ IG_Cattrs, 16
 
 # cell attribute bits (src/tui/render.s)
 .equ A_BOLD,      1
@@ -79,6 +85,7 @@
 # modal picker kinds (mirror src/tui/menu.s)
 .equ MK_MODEL,    1
 .equ MK_THINKING, 2
+.equ MK_SESSION,  4
 
 .equ RECV_CHUNK2, 65536
 .equ TUI_MAX_DIM, 4096
@@ -142,6 +149,8 @@
 .Lw_quit:     .asciz "quit"
 .Lw_thinking: .asciz "thinking"
 .Lw_compact:  .asciz "compact"
+.Lw_resume:   .asciz "resume"
+.Lw_continue: .asciz "continue"
 .Lw_theme:    .asciz "theme"
 .Lsystem:     .asciz "system"
 .Ltgl_dark:   .asciz "dark"
@@ -149,6 +158,16 @@
 .Ltheme_pre:  .asciz "theme: "
 .Ltheme_bad:  .asciz "theme: unknown '"
 .Lnew_msg:   .asciz "[new session]"
+# in-TUI /resume and /continue
+.Lresume_none:   .asciz "resume: no stored sessions"
+.Lresume_wait:   .asciz "resume: cancelling the current run..."
+.Lresume_fail:   .asciz "resume: cannot open the session"
+.Lresume_prefix: .asciz "resumed "
+.Lempty_session: .asciz "(empty session)"
+.Lage_now:       .asciz "now"
+.Lage_m:         .asciz "m"
+.Lage_h:         .asciz "h"
+.Lage_d:         .asciz "d"
 .Lcleared:   .asciz "[cleared]"
 .Lmodel:     .asciz "model: "
 .Lparen:     .asciz "("
@@ -204,6 +223,7 @@
     .ascii "- /model [id] switch model (no argument reports it)\n"
     .ascii "- /thinking [off|low|medium|high]\n"
     .ascii "- /compact compact the conversation into a summary\n"
+    .ascii "- /resume /continue switch session\n"
     .ascii "- /theme [dark|light|<name>]\n"
     .asciz "- /quit /new /clear /help\n"
 .Lxdg:       .asciz "XDG_STATE_HOME"
@@ -293,6 +313,10 @@ t_pickname:       .zero 8 * 32
 t_pickdesc:       .zero 8 * 32
 t_picktext:       .zero 8192
 t_pickbump:       .zero 8
+# Owned session list for the in-TUI resume picker (session_recent VEC).
+t_sessions:       .zero 8
+# Run-in-flight /resume defers the switch until the abort unwinds.
+t_switch_pending: .zero 4
 # S7 owned inline region state.  t_in_rows is the region height painted last
 # frame; t_in_commit is the first transcript message not yet printed to
 # scrollback; t_in_live_base is the number of view rows those committed
@@ -1900,6 +1924,101 @@ FN tui_suppress_committed_cards
 .Ltsc_done:
     EPILOGUE
 
+# tui_scrollbar(edi=track, rsi=total, rdx=visible, rcx=scroll)
+# A one-column scrollbar in the grid's last column over `track` rows: a dim `|`
+# track with a reverse-video thumb sized by visible/total and positioned by
+# `scroll` rows from the bottom (0 = bottom).  A no-op when total <= visible or
+# the geometry is degenerate.
+FN tui_scrollbar
+    PROLOGUE 48
+    test edi, edi
+    jle .Lsb_done
+    test rsi, rsi
+    jz .Lsb_done
+    test rdx, rdx
+    jz .Lsb_done
+    cmp rsi, rdx
+    jbe .Lsb_done
+    mov r12d, edi                 # track
+    mov r13, rsi                  # total
+    mov r14, rdx                  # visible
+    mov r15, rcx                  # scroll from bottom
+    mov rax, r12
+    imul rax, r14
+    xor edx, edx
+    div r13
+    test rax, rax
+    jnz 1f
+    mov eax, 1
+1:  cmp rax, r12
+    jbe 2f
+    mov rax, r12
+2:  mov [rbp - 48], rax           # thumb rows
+    mov rbx, r13
+    sub rbx, r14                  # max_scroll
+    cmp r15, rbx
+    jbe 3f
+    mov r15, rbx
+3:  mov rax, rbx
+    sub rax, r15
+    mov rcx, r12
+    sub rcx, [rbp - 48]
+    imul rax, rcx
+    test rbx, rbx
+    jz 4f
+    xor edx, edx
+    div rbx
+4:  mov [rbp - 56], rax           # top row
+    mov esi, TH_FG
+    call theme_rgb
+    mov [rbp - 64], eax
+    mov esi, TH_MUTED
+    call theme_rgb
+    mov [rbp - 68], eax
+    mov rax, [rip + t_grid + IG_cells]
+    mov [rbp - 72], rax
+    mov eax, [rip + t_grid + IG_w]
+    mov [rbp - 80], eax
+    xor r13d, r13d                 # y
+.Lsb_loop:
+    cmp r13d, r12d
+    jae .Lsb_done
+    mov eax, [rbp - 80]
+    dec eax
+    test eax, eax
+    js .Lsb_done
+    mov rcx, r13
+    imul rcx, [rbp - 80]
+    add rcx, rax
+    imul rcx, rcx, IG_CELL
+    add rcx, [rbp - 72]
+    mov rax, [rbp - 56]
+    cmp r13, rax
+    jb .Lsb_track
+    add rax, [rbp - 48]
+    cmp r13, rax
+    jae .Lsb_track
+    mov dword ptr [rcx + IG_Ccp], ' '
+    mov dword ptr [rcx + IG_Ccomb], 0
+    mov eax, [rbp - 64]
+    mov [rcx + IG_Cfg], eax
+    mov dword ptr [rcx + IG_Cbg], 0
+    mov word ptr [rcx + IG_Cattrs], 8       # A_REVERSE
+    jmp .Lsb_next
+.Lsb_track:
+    mov dword ptr [rcx + IG_Ccp], '|'
+    mov dword ptr [rcx + IG_Ccomb], 0
+    mov eax, [rbp - 68]
+    mov [rcx + IG_Cfg], eax
+    mov dword ptr [rcx + IG_Cbg], 0
+    mov word ptr [rcx + IG_Cattrs], 4       # A_DIM
+.Lsb_next:
+    inc r13d
+    jmp .Lsb_loop
+.Lsb_done:
+    xor eax, eax
+    EPILOGUE
+
 # tui_draw_region(): compose and paint the owned inline region.
 FN tui_draw_region
     PROLOGUE 64
@@ -2062,6 +2181,21 @@ FN tui_draw_region
     xor edx, edx
     xor ecx, ecx
     call view_draw
+    # Scrollbar when the uncommitted tail is taller than the region; the thumb
+    # follows the viewport so PgUp/PgDn visibly move it.
+    mov edi, [rbp + RG_chat]      # track = visible
+    mov rsi, [rbp + RG_tot]       # total = uncommitted tail rows
+    mov edx, edi                 # visible
+    mov ecx, esi
+    sub ecx, edi                 # max_scroll = total - visible
+    mov eax, [rip + t_view + VV_top]
+    sub eax, [rip + t_in_offset]
+    jns 1f
+    xor eax, eax
+1:  sub ecx, eax                 # scroll from bottom
+    jns 2f
+    xor ecx, ecx
+2:  call tui_scrollbar
     cmp dword ptr [rbp + RG_q], 0
     je .Lrg_noq
     mov edi, [rbp + RG_chat]
@@ -3116,7 +3250,7 @@ tui_handle_event:
     call tui_submit_editor
     EPILOGUE
 
-# ---- modal picker (MODEL/THINKING) ----------------------------------------
+# ---- modal picker (MODEL/THINKING/SESSION) --------------------------------
 # menu_key edits the filter and moves the selection; the shell applies the
 # highlighted row on Enter and lets Esc cancel (menu_key already closed it).
 .Le_modal:
@@ -3131,6 +3265,7 @@ tui_handle_event:
     mov dword ptr [rip + t_dirty], 1
     EPILOGUE
 .Le_modal_esc:
+    call tui_session_pick_free
     mov dword ptr [rip + t_dirty], 1
     EPILOGUE
 .Le_modal_enter:
@@ -3148,6 +3283,8 @@ tui_handle_event:
     je .Le_modal_model
     cmp eax, MK_THINKING
     je .Le_modal_think
+    cmp eax, MK_SESSION
+    je .Le_modal_session
     call menu_close
     jmp .Le_modal_done
 .Le_modal_model:
@@ -3159,6 +3296,11 @@ tui_handle_event:
     call menu_close
     mov rdi, rbx
     call tui_cmd_thinking
+    jmp .Le_modal_done
+.Le_modal_session:
+    mov rdi, rbx
+    call tui_session_accept
+    call menu_close
 .Le_modal_done:
     mov dword ptr [rip + t_dirty], 1
     EPILOGUE
@@ -3774,6 +3916,20 @@ tui_cmd_builtin:
     call str_eq_cstr
     test eax, eax
     jnz .Lcb_theme
+    mov rdi, r12
+    call strlen
+    mov rsi, rax
+    lea rdx, [rip + .Lw_resume]
+    call str_eq_cstr
+    test eax, eax
+    jnz .Lcb_resume
+    mov rdi, r12
+    call strlen
+    mov rsi, rax
+    lea rdx, [rip + .Lw_continue]
+    call str_eq_cstr
+    test eax, eax
+    jnz .Lcb_resume
     xor eax, eax
     EPILOGUE
 .Lcb_clear:
@@ -3804,6 +3960,9 @@ tui_cmd_builtin:
 .Lcb_theme:
     mov rdi, r13
     call tui_cmd_theme
+    jmp .Lcb_yes
+.Lcb_resume:
+    call tui_cmd_resume
     jmp .Lcb_yes
 
 # tui_cmd_skill(rdi=word, rsi=args) -> eax 1 handled (even on error) | 0.
@@ -4103,6 +4262,271 @@ tui_pick_putdesc:
     lea rcx, [rax + r13 + 1]
     mov [rip + t_pickbump], rcx
     EPILOGUE
+
+# tui_pick_putcstr(rdi=cstr) -> rax: copy a NUL-terminated string into the
+# picker bump arena (reset on every picker open).
+tui_pick_putcstr:
+    PROLOGUE 0
+    mov r12, rdi
+    call strlen
+    mov r13, rax
+    mov rdi, [rip + t_pickbump]
+    test rdi, rdi
+    jnz 1f
+    lea rdi, [rip + t_picktext]
+1:  mov rsi, r12
+    mov rdx, r13
+    call memcpy
+    mov byte ptr [rax + r13], 0
+    lea rcx, [rax + r13 + 1]
+    mov [rip + t_pickbump], rcx
+    EPILOGUE
+
+# tui_session_pick_free(): release the owned session list for the resume
+# picker.  Safe to call when no picker ever opened.
+tui_session_pick_free:
+    PROLOGUE 0
+    mov rdi, [rip + t_sessions]
+    test rdi, rdi
+    jz 1f
+    call session_recent_free
+    mov qword ptr [rip + t_sessions], 0
+1:  EPILOGUE
+
+# tui_age_label(rdi=ts_ms) -> rax: a short age label (agentc's session_age_label)
+# built in the bump arena: "now", "<n>m", "<n>h" or "<n>d".
+tui_age_label:
+    PROLOGUE 32
+    mov r12, rdi                 # ts_ms
+    mov edi, CLOCK_REALTIME
+    call os_now_ns
+    mov rcx, 1000000
+    xor edx, edx
+    div rcx
+    mov r13, rax                 # now_ms
+    sub r13, r12                 # age_ms
+    jns 1f
+    xor r13d, r13d
+1:  lea rdi, [rip + t_osb]
+    call sb_clear
+    cmp r13, 60000
+    jae .Lal_min
+    lea rdi, [rip + t_osb]
+    lea rsi, [rip + .Lage_now]
+    call sb_push_cstr
+    jmp .Lal_done
+.Lal_min:
+    cmp r13, 3600000
+    jae .Lal_hour
+    mov rbx, 60000
+    lea r14, [rip + .Lage_m]
+    jmp .Lal_num
+.Lal_hour:
+    cmp r13, 86400000
+    jae .Lal_day
+    mov rbx, 3600000
+    lea r14, [rip + .Lage_h]
+    jmp .Lal_num
+.Lal_day:
+    mov rbx, 86400000
+    lea r14, [rip + .Lage_d]
+.Lal_num:
+    mov rax, r13
+    xor edx, edx
+    div rbx
+    mov rsi, rax
+    lea rdi, [rip + t_osb]
+    call sb_push_u64
+    lea rdi, [rip + t_osb]
+    mov rsi, r14
+    call sb_push_cstr
+.Lal_done:
+    call tui_pick_putdesc
+    EPILOGUE
+
+# tui_picker_open_session(): `/resume` and `/continue` with no run in flight.
+# List the cwd's stored sessions newest first (session_recent already sorts by
+# the header stamp), each row an age label plus the first user message preview.
+# No sessions (or a read failure) reports the empty notice instead of opening.
+FN tui_picker_open_session
+    PROLOGUE 64
+    call tui_session_pick_free
+    lea rax, [rip + t_picktext]
+    mov [rip + t_pickbump], rax
+    mov rdi, [rip + cl_sdir]
+    lea rsi, [rip + cl_cwd]
+    call session_recent
+    test rax, rax
+    jz .Lps_none
+    mov [rip + t_sessions], rax
+    mov r15, rax                 # VEC*
+    mov rdi, rax
+    call session_recent_count
+    mov r12, rax                 # session count
+    test r12, r12
+    jz .Lps_none
+    cmp r12, 32
+    jbe 1f
+    mov r12d, 32
+1:  xor r13d, r13d               # base (VEC) index
+    xor r14d, r14d               # output row count
+.Lps_loop:
+    cmp r13, r12
+    jae .Lps_done
+    mov rdi, r15
+    mov rsi, r13
+    call session_recent_ts
+    mov rdi, rax
+    call tui_age_label
+    lea rcx, [rip + t_pickname]
+    mov [rcx + r14*8], rax
+    mov rdi, r15
+    mov rsi, r13
+    call session_recent_desc
+    mov [rbp - 48], rax
+    mov rdi, rax
+    call strlen
+    test rax, rax
+    jnz 2f
+    lea rdi, [rip + .Lempty_session]
+    call tui_pick_putcstr
+    jmp 3f
+2:  mov rdi, [rbp - 48]
+    call tui_pick_putcstr
+3:  lea rcx, [rip + t_pickdesc]
+    mov [rcx + r14*8], rax
+    inc r14d
+    inc r13d
+    jmp .Lps_loop
+.Lps_done:
+    mov esi, MK_SESSION
+    call menu_begin
+    lea rdi, [rip + t_pickname]
+    lea rsi, [rip + t_pickdesc]
+    mov edx, r14d
+    xor ecx, ecx
+    call menu_rows
+    EPILOGUE
+.Lps_none:
+    call tui_session_pick_free
+    lea rdi, [rip + .Lresume_none]
+    call strlen
+    mov rsi, rax
+    lea rdi, [rip + .Lresume_none]
+    call tui_notice
+    EPILOGUE
+
+# tui_after_resume(): a successful /resume replaced the live transcript.  Drop
+# the view/chat/editor like a session swap and replay the new transcript through
+# the mode's own path (scrollback streams once, the owned region re-commits).
+tui_after_resume:
+    PROLOGUE 0
+    call tui_session_pick_free
+    lea rdi, [rip + t_ed]
+    call editor_clear
+    lea rdi, [rip + t_chat]
+    call chat_clear
+    mov dword ptr [rip + t_md_live_on], 0
+    mov dword ptr [rip + t_streamed], 0
+    mov dword ptr [rip + t_in_commit], 0
+    mov dword ptr [rip + t_in_offset], 0
+    mov dword ptr [rip + t_in_base_len], 0
+    mov dword ptr [rip + t_cards_dirty], 0
+    mov dword ptr [rip + t_last_max], 0
+    mov dword ptr [rip + t_top_pre], 0
+    mov dword ptr [rip + t_was_bottom], 1
+    cmp dword ptr [rip + t_ui_mode], 0
+    jne .Lar_grid
+    call inline_history
+    jmp .Lar_done
+.Lar_grid:
+    call tui_render_all
+.Lar_done:
+    mov dword ptr [rip + t_dirty], 1
+    EPILOGUE
+
+# tui_session_accept(rdi=age label): Enter on the session picker.  Load the
+# selected stored session through the frozen agent_load_session and rebuild; a
+# refused/corrupt file leaves the current transcript intact and reports it.
+tui_session_accept:
+    PROLOGUE 32
+    mov [rbp - 48], rdi          # age label (bump arena; survives the free)
+    call menu_sel_base
+    test eax, eax
+    js .Lsa_fail
+    mov rdi, [rip + t_sessions]
+    test rdi, rdi
+    jz .Lsa_fail
+    mov rsi, rax
+    call session_recent_path
+    test rax, rax
+    jz .Lsa_fail
+    mov rdi, rax
+    call agent_load_session
+    test eax, eax
+    jnz .Lsa_fail
+    call tui_after_resume
+    lea rdi, [rip + t_osb]
+    call sb_clear
+    lea rdi, [rip + t_osb]
+    lea rsi, [rip + .Lresume_prefix]
+    call sb_push_cstr
+    lea rdi, [rip + t_osb]
+    mov rsi, [rbp - 48]
+    call sb_push_cstr
+    # copy the notice out of t_osb: tui_notice's scrollback path clears t_osb
+    # for the footer erase before reading the message.
+    call tui_pick_putdesc
+    mov rdi, rax
+    mov rsi, [rip + t_osb + SB_len]
+    call tui_notice
+    EPILOGUE
+.Lsa_fail:
+    call tui_session_pick_free
+    lea rdi, [rip + .Lresume_fail]
+    call strlen
+    mov rsi, rax
+    lea rdi, [rip + .Lresume_fail]
+    call tui_notice
+    EPILOGUE
+
+# tui_cmd_resume(): /resume and /continue share this handler.  While a run is
+# in flight the abort is requested now and the picker opens once it unwinds, so
+# a swap can never race an executing tool.
+FN tui_cmd_resume
+    PROLOGUE 0
+    call agent_busy
+    test eax, eax
+    jz .Lcr_open
+    cmp dword ptr [rip + t_switch_pending], 0
+    jne .Lcr_done
+    mov dword ptr [rip + t_switch_pending], 1
+    call agent_abort
+    lea rdi, [rip + .Lresume_wait]
+    call strlen
+    mov rsi, rax
+    lea rdi, [rip + .Lresume_wait]
+    call tui_notice
+.Lcr_done:
+    EPILOGUE
+.Lcr_open:
+    call tui_picker_open_session
+    EPILOGUE
+
+# tui_poll_switch(): open the deferred /resume picker once the aborted run ends.
+tui_poll_switch:
+    cmp dword ptr [rip + t_switch_pending], 0
+    je .Lpsw_ret
+    PROLOGUE 0
+    call agent_busy
+    test eax, eax
+    jnz .Lpsw_done
+    mov dword ptr [rip + t_switch_pending], 0
+    call tui_picker_open_session
+.Lpsw_done:
+    EPILOGUE
+.Lpsw_ret:
+    ret
 
 # tui_picker_open_model(): `/model` with no argument.  Build the current
 # provider's catalog rows (id + "(current) provider ctx= reasoning image") and
@@ -4530,6 +4954,7 @@ tui_wait_ms:
     add r13, rax
 1:  mov edi, 10
     call agent_step
+    call tui_poll_switch
     call tui_queue_drain
     call tui_process_keys
     cmp dword ptr [rip + t_dirty], 0
@@ -5043,6 +5468,7 @@ tui_loop_interactive:
     call tui_resize
 2:  mov edi, 50
     call agent_step
+    call tui_poll_switch
     call tui_queue_drain
     # 50 ms lone-ESC / partial-escape timeout.  Any byte consumed during the
     # poll above disarms the timer, so a real escape sequence arriving in a

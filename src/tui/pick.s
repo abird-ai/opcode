@@ -334,7 +334,10 @@ FN opcode_pick
     call menu_count
     test eax, eax
     jz .Lpk_events_redraw
-    call menu_sel
+    # menu_sel_base maps the filtered view row back to the base row the
+    # caller's arrays are indexed by, so a typed filter cannot select the
+    # wrong session.
+    call menu_sel_base
     mov [rbp - 88], eax
     jmp .Lpk_finish
 .Lpk_events_redraw:

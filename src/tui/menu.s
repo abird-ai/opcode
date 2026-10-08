@@ -6,6 +6,7 @@
 #   menu_open() -> eax 1|0
 #   menu_count() -> eax
 #   menu_sel() -> eax
+#   menu_sel_base() -> eax         base row of the selected filtered row, -1
 #   menu_top() -> eax              clamped so the selection is visible
 #   menu_height(esi avail) -> eax  min(count, 8, avail); 0 when closed
 #   menu_key(esi key, edx cp, ecx mods) -> eax 1 consumed | 0
@@ -42,16 +43,17 @@
 .equ MENU_STORE_MAX,   32
 .equ MENU_VISIBLE_MAX, 8
 .equ MENU_FILTER_MAX,  63
-.equ MENU_BUILTIN_N,   8
+.equ MENU_BUILTIN_N,   10
 .equ MENU_SRC_MAX,     MENU_STORE_MAX
 
-# Picker kinds.  COMMAND is the slash-command menu (text driven); MODEL and
-# THINKING are modal pickers whose rows are supplied by the app; PICK is the
-# standalone pre-TUI list used by the session picker.
+# Picker kinds.  COMMAND is the slash-command menu (text driven); MODEL,
+# THINKING and SESSION are modal pickers whose rows are supplied by the app;
+# PICK is the standalone pre-TUI list used by the session picker.
 .equ MENU_KIND_COMMAND,  0
 .equ MENU_KIND_MODEL,    1
 .equ MENU_KIND_THINKING, 2
 .equ MENU_KIND_PICK,     3
+.equ MENU_KIND_SESSION,  4
 
 # Module state.  M_name/M_desc hold pointers into the builtin table so the
 # filtered order is cheap to reconstruct on every update.
@@ -71,6 +73,8 @@ F M_desc,     256
 F M_all_count,  4
 F M_all_name, 256
 F M_all_desc, 256
+# Explicit-kind filtered row -> base row map (menu_sel_base).
+F M_vidx, 4*MENU_STORE_MAX
 ENDSTRUCT M_SIZE
 
 # menu_render locals, addressed relative to rbp (frame leaves room to -144).
@@ -101,6 +105,8 @@ ENDSTRUCT M_SIZE
 .Lmn_theme: .asciz "theme"
 .Lmn_thinking: .asciz "thinking"
 .Lmn_compact:  .asciz "compact"
+.Lmn_resume:   .asciz "resume"
+.Lmn_continue: .asciz "continue"
 
 .Lmd_clear: .asciz "clear the transcript view"
 .Lmd_help:  .asciz "show key bindings and slash commands"
@@ -110,6 +116,8 @@ ENDSTRUCT M_SIZE
 .Lmd_theme: .asciz "switch theme (dark|light|<name>)"
 .Lmd_thinking: .asciz "set reasoning level (off|low|medium|high)"
 .Lmd_compact:  .asciz "compact the conversation into a summary"
+.Lmd_resume:   .asciz "switch to another session"
+.Lmd_continue: .asciz "switch to another session"
 
 .p2align 3
 .Lmenu_builtin:
@@ -121,6 +129,8 @@ ENDSTRUCT M_SIZE
     .quad .Lmn_theme, .Lmd_theme
     .quad .Lmn_thinking, .Lmd_thinking
     .quad .Lmn_compact,  .Lmd_compact
+    .quad .Lmn_resume,   .Lmd_resume
+    .quad .Lmn_continue, .Lmd_continue
 
 .Lmenu_skill_prefix: .asciz "skill:"
 
@@ -700,6 +710,8 @@ FN menu_update
     lea rcx, [rip + .Lmenu_state + M_all_desc]
     mov rdx, [rcx + r14*8]
     mov [rax + r13*8], rdx
+    lea rax, [rip + .Lmenu_state + M_vidx]
+    mov [rax + r13*4], r14d
     inc r13d
 .Lmu_enext:
     inc r14d
@@ -754,6 +766,23 @@ FN menu_count
 
 FN menu_sel
     mov eax, [rip + .Lmenu_state + M_sel]
+    ret
+
+# menu_sel_base(): the base row index of the currently selected filtered row.
+# Explicit kinds (MODEL/THINKING/PICK/SESSION) filter, so the selected view row
+# is not the base row; COMMAND returns its own index unchanged. -1 when empty.
+FN menu_sel_base
+    mov eax, [rip + .Lmenu_state + M_sel]
+    cmp eax, [rip + .Lmenu_state + M_count]
+    jae .Lmsb_none
+    cmp dword ptr [rip + .Lmenu_state + M_kind], MENU_KIND_COMMAND
+    je .Lmsb_ret
+    lea rcx, [rip + .Lmenu_state + M_vidx]
+    mov eax, [rcx + rax*4]
+.Lmsb_ret:
+    ret
+.Lmsb_none:
+    mov eax, -1
     ret
 
 # menu_top(): stored top clamped so the selection sits in the 8-row window.
@@ -820,18 +849,29 @@ FN menu_key
     xor eax, eax
     ret
 .Lmk_up:
+    mov ecx, [rip + .Lmenu_state + M_count]
+    test ecx, ecx
+    jz .Lmk_yes
     mov eax, [rip + .Lmenu_state + M_sel]
     test eax, eax
-    jle .Lmk_yes
+    jnz 1f
+    mov eax, ecx
     dec eax
     mov [rip + .Lmenu_state + M_sel], eax
     jmp .Lmk_yes
+1:  dec eax
+    mov [rip + .Lmenu_state + M_sel], eax
+    jmp .Lmk_yes
 .Lmk_down:
+    mov ecx, [rip + .Lmenu_state + M_count]
+    test ecx, ecx
+    jz .Lmk_yes
     mov eax, [rip + .Lmenu_state + M_sel]
     inc eax
-    cmp eax, [rip + .Lmenu_state + M_count]
-    jge .Lmk_yes
-    mov [rip + .Lmenu_state + M_sel], eax
+    cmp eax, ecx
+    jb 1f
+    xor eax, eax
+1:  mov [rip + .Lmenu_state + M_sel], eax
     jmp .Lmk_yes
 .Lmk_enter:
     test ecx, 1                    # Alt+Enter inserts a newline instead
@@ -870,18 +910,29 @@ FN menu_key
     je .Lmk_no
     jmp .Lmkm_filter
 .Lmkm_up:
+    mov ecx, [rip + .Lmenu_state + M_count]
+    test ecx, ecx
+    jz .Lmk_yes
     mov eax, [rip + .Lmenu_state + M_sel]
     test eax, eax
-    jle .Lmk_yes
+    jnz 1f
+    mov eax, ecx
     dec eax
     mov [rip + .Lmenu_state + M_sel], eax
     jmp .Lmk_yes
+1:  dec eax
+    mov [rip + .Lmenu_state + M_sel], eax
+    jmp .Lmk_yes
 .Lmkm_down:
+    mov ecx, [rip + .Lmenu_state + M_count]
+    test ecx, ecx
+    jz .Lmk_yes
     mov eax, [rip + .Lmenu_state + M_sel]
     inc eax
-    cmp eax, [rip + .Lmenu_state + M_count]
-    jge .Lmk_yes
-    mov [rip + .Lmenu_state + M_sel], eax
+    cmp eax, ecx
+    jb 1f
+    xor eax, eax
+1:  mov [rip + .Lmenu_state + M_sel], eax
     jmp .Lmk_yes
 .Lmkm_pgup:
     mov eax, [rip + .Lmenu_state + M_sel]
