@@ -26,6 +26,9 @@
 
 .equ PK_MAXDIM, 4096
 .equ PK_READSZ, 4096
+# Poll window for the real terminal.  Same order as the main TUI's 50 ms tick
+# so a deferred lone ESC is flushed by input_idle without busy-spinning.
+.equ PK_POLL_MS, 50
 
 .data
 .p2align 3
@@ -44,6 +47,8 @@ g_pick_out_fd: .quad 1
 pick_grid:    .zero 512
 pick_in:      .zero 4096
 pick_inbuf:   .zero PK_READSZ
+pick_pfd:     .zero 8               # one pollfd { fd, events, revents }
+pick_dirty:   .zero 4               # redraw only when state changed
 pick_ev:      .zero 32
 pick_sb:      .zero SB_SIZE
 pick_title:   .zero 8
@@ -78,6 +83,21 @@ pick_read:
     call os_read
     EPILOGUE
 2:  xor eax, eax
+    EPILOGUE
+
+# pk_idle(): pump the input parser's lone-ESC / partial-sequence timeout using
+# the monotonic clock.  Called on every poll timeout (and right after a feed)
+# so a lone ESC sitting in the parser becomes K_ESC instead of blocking.
+pk_idle:
+    PROLOGUE 0
+    mov edi, CLOCK_MONOTONIC
+    call os_now_ns
+    mov rcx, 1000000
+    xor edx, edx
+    div rcx
+    lea rdi, [rip + pick_in]
+    mov rsi, rax
+    call input_idle
     EPILOGUE
 
 # pick_draw(): clear the grid and paint the title, the filtered rows and the
@@ -216,26 +236,80 @@ FN opcode_pick
     lea rdi, [rip + pick_in]
     call input_init
 
+    lea rdi, [rip + pick_in]
+    call input_init
+    mov dword ptr [rip + pick_dirty], 1
+
 .Lpk_loop:
+    cmp dword ptr [rip + pick_dirty], 0
+    je .Lpk_nodraw
+    mov dword ptr [rip + pick_dirty], 0
     call pick_draw
     call pick_emit
+.Lpk_nodraw:
 
+    xor r15d, r15d               # r15 = 1 once the input source is exhausted
+
+    # In-memory hook first (tests / headless): non-blocking, may return test
+    # bytes then EOF.  No fd to poll, so call it directly.
+    mov rax, [rip + g_pick_read]
+    test rax, rax
+    jnz .Lpk_hook
+    cmp qword ptr [rip + g_tui_headless], 0
+    jne .Lpk_eof                 # headless, no hook: EOF, never block
+
+    # Real terminal: poll the picker fd with a short timeout so a deferred lone
+    # ESC is flushed by pk_idle instead of blocking forever in pick_read.
+    mov eax, [rip + g_pick_fd]
+    mov [rip + pick_pfd], eax
+    mov word ptr [rip + pick_pfd + 4], POLLIN
+    mov word ptr [rip + pick_pfd + 6], 0
+    lea rdi, [rip + pick_pfd]
+    mov esi, 1
+    mov edx, PK_POLL_MS
+    call os_poll
+    test rax, rax
+    js .Lpk_eof                  # poll error: treat as end of input
+    jz .Lpk_timeout
     lea rdi, [rip + pick_inbuf]
     mov esi, PK_READSZ
     call pick_read
+    jmp .Lpk_ready
+
+.Lpk_hook:
+    lea rdi, [rip + pick_inbuf]
+    mov esi, PK_READSZ
+    call rax
+    jmp .Lpk_ready
+
+.Lpk_timeout:
+    # No byte within the window: pump the parser timeout and drain any K_ESC.
+    call pk_idle
+    jmp .Lpk_events
+
+.Lpk_eof:
+    xor eax, eax
+.Lpk_ready:
     test rax, rax
-    jle .Lpk_cancel_loop
+    jg .Lpk_feed
+    mov r15d, 1                  # EOF/error: cancel after draining
+    call pk_idle                 # flush a lone ESC from a scripted byte stream
+    jmp .Lpk_events
+.Lpk_feed:
     mov rdx, rax
     lea rdi, [rip + pick_in]
     lea rsi, [rip + pick_inbuf]
     call input_feed
+    # Arm the lone-ESC timer now; the next byte of a real sequence disarms it.
+    # A lone ESC then fires on the next idle pump (~50 ms), never blocking.
+    call pk_idle
 
 .Lpk_events:
     lea rdi, [rip + pick_in]
     lea rsi, [rip + pick_ev]
     call input_next
     test eax, eax
-    jz .Lpk_loop
+    jz .Lpk_drained
     mov r12d, [rip + pick_ev + 0]   # key
     mov r13d, [rip + pick_ev + 4]   # cp
     mov r14d, [rip + pick_ev + 8]   # mods
@@ -247,11 +321,14 @@ FN opcode_pick
     je .Lpk_select
     cmp r12d, PK_ESC
     je .Lpk_cancel_loop
-    cmp qword ptr [rip + g_tui_headless], 0
-    je .Lpk_events
-    call pick_draw
-    call pick_emit
+    # Any other key changes the filter/selection: redraw on the next pass.
+    mov dword ptr [rip + pick_dirty], 1
     jmp .Lpk_events
+
+.Lpk_drained:
+    test r15d, r15d
+    jz .Lpk_loop
+    jmp .Lpk_cancel_loop
 
 .Lpk_select:
     call menu_count
@@ -261,10 +338,7 @@ FN opcode_pick
     mov [rbp - 88], eax
     jmp .Lpk_finish
 .Lpk_events_redraw:
-    cmp qword ptr [rip + g_tui_headless], 0
-    je .Lpk_events
-    call pick_draw
-    call pick_emit
+    mov dword ptr [rip + pick_dirty], 1
     jmp .Lpk_events
 .Lpk_cancel_loop:
     mov eax, -1
