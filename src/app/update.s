@@ -18,7 +18,7 @@
 .equ UPD_HOST_CAP, 512
 
 .section .rodata
-.Ldef_url:      .asciz "https://api.github.com/repos/vshvedov/opcode/releases/latest"
+.Ldef_url:      .asciz "https://api.github.com/repos/abird-ai/opcode/releases/latest"
 .Lopt_url:      .asciz "--url"
 .Lopt_json:     .asciz "--json"
 .Lopt_check:    .asciz "--check"

@@ -26,11 +26,14 @@
 g_config_approve: .quad 0       # set by --approve before config_load
 .globl g_config_home
 g_config_home:    .quad 0       # app/test override: the opcode config dir; 0 = XDG/HOME
+.globl g_config_interactive
+g_config_interactive: .quad 0  # app sets 1 for an interactive front end (TTY TUI)
 cfg_dir:      .quad 0           # cached <config dir>, process lifetime
 cfg_user:     .quad 0           # raw user config.jsonc bytes (owned)
 cfg_user_len: .quad 0
 cfg_proj:     .quad 0           # raw project config.jsonc bytes (owned)
 cfg_proj_len: .quad 0
+cfg_trust_asked: .quad 0        # process-lifetime: the trust prompt runs at most once
 
 .section .rodata
 .Lenv_xdg:       .asciz "XDG_CONFIG_HOME"
@@ -57,6 +60,30 @@ cfg_proj_len: .quad 0
 .Lkey_pv:        .asciz "providers"
 .Lkey_base:      .asciz "base_url"
 .Lslash:         .asciz "/"
+# Interactive project-trust prompt (see config_trust_ask).
+.Ltrust_prompt:       .asciz "trust this directory? [y/N] "
+.Lpr_config:          .asciz "/.opcode/config.jsonc"
+.Lpr_mcp:             .asciz "/.opcode/mcp.jsonc"
+.Lpr_skills:          .asciz "/.opcode/skills"
+.Lpr_prompts:         .asciz "/.opcode/prompts"
+.Lpr_themes:          .asciz "/.opcode/themes"
+.Lpr_agents_override: .asciz "/AGENTS.override.md"
+.Lpr_agents:          .asciz "/AGENTS.md"
+.Lpr_opcode:          .asciz "/OPCODE.md"
+.Lpr_claude:          .asciz "/CLAUDE.md"
+.p2align 3
+# {suffix, open flags}: any hit means the cwd ships project-scoped resources.
+.Lproj_res:
+    .quad .Lpr_config;          .quad O_RDONLY
+    .quad .Lpr_mcp;             .quad O_RDONLY
+    .quad .Lpr_agents_override; .quad O_RDONLY
+    .quad .Lpr_agents;          .quad O_RDONLY
+    .quad .Lpr_opcode;          .quad O_RDONLY
+    .quad .Lpr_claude;          .quad O_RDONLY
+    .quad .Lpr_skills;          .quad O_RDONLY | O_DIRECTORY
+    .quad .Lpr_prompts;         .quad O_RDONLY | O_DIRECTORY
+    .quad .Lpr_themes;          .quad O_RDONLY | O_DIRECTORY
+    .quad 0;                    .quad 0
 .text
 
 # env_get(name cstr) -> cstr | 0.  Case-sensitive walk of the NULL-terminated
@@ -1237,6 +1264,122 @@ warn_invalid:
     call log_nl
     EPILOGUE
 
+# ---------------------------------------------------------------------------
+# .Lhas_project_resources(cwd cstr) -> 1|0.  True when the cwd ships any
+# project-scoped resource (project config, mcp, context files, skills,
+# prompts or themes).  A missing/unreadable path is not a resource.
+.Lhas_project_resources:
+    PROLOGUE 16
+    mov rbx, rdi
+    lea r12, [rip + .Lproj_res]
+.Lhpr_loop:
+    mov rsi, [r12]
+    test rsi, rsi
+    jz .Lhpr_no
+    mov rdi, rbx
+    call config_path_join
+    test rax, rax
+    jz .Lhpr_next
+    mov r13, rax
+    mov rdi, rax
+    mov rsi, [r12 + 8]
+    xor edx, edx
+    call os_open
+    test rax, rax
+    js .Lhpr_free
+    mov edi, eax
+    call os_close
+    mov rdi, r13
+    call mem_free
+    mov eax, 1
+    EPILOGUE
+.Lhpr_free:
+    mov rdi, r13
+    call mem_free
+.Lhpr_next:
+    add r12, 16
+    jmp .Lhpr_loop
+.Lhpr_no:
+    xor eax, eax
+    EPILOGUE
+
+# config_trust_ask(cwd cstr) -> 1 now trusted (saved) | 0 untrusted.  At most
+# once per process: only for an interactive front end (g_config_interactive),
+# with stdin on a terminal, an untrusted cwd and at least one project resource.
+# Prints "trust this directory? [y/N] " and saves the answer on y/Y; anything
+# else (including EOF) leaves the cwd untrusted.
+config_trust_ask:
+    PROLOGUE 128
+    test rdi, rdi
+    jz .Lcta_no
+    mov rbx, rdi
+    cmp qword ptr [rip + cfg_trust_asked], 0
+    jne .Lcta_known
+    mov qword ptr [rip + cfg_trust_asked], 1
+    cmp qword ptr [rip + g_config_interactive], 0
+    je .Lcta_no
+    lea rdi, [rsp]                  # 64-byte termios scratch
+    call os_tty_raw
+    test rax, rax
+    js .Lcta_no
+    lea rdi, [rsp]
+    call os_tty_restore
+    mov rdi, rbx
+    call .Lhas_project_resources
+    test eax, eax
+    jz .Lcta_no
+    lea rdi, [rip + .Ltrust_prompt]
+    call strlen
+    mov rdx, rax
+    lea rsi, [rip + .Ltrust_prompt]
+    mov edi, 1
+    call write_all
+.Lcta_read:
+    xor edi, edi
+    lea rsi, [rsp + 64]             # 31-byte response scratch
+    mov edx, 31
+    call os_read
+    cmp rax, -EINTR
+    je .Lcta_read
+    test rax, rax
+    jle .Lcta_no
+    xor ecx, ecx
+.Lcta_scan:
+    cmp rcx, rax
+    jae .Lcta_no
+    mov dl, [rsp + 64 + rcx]
+    cmp dl, ' '
+    je .Lcta_skip
+    cmp dl, 9
+    je .Lcta_skip
+    cmp dl, 10
+    je .Lcta_skip
+    cmp dl, 13
+    je .Lcta_skip
+    jmp .Lcta_decide
+.Lcta_skip:
+    inc rcx
+    jmp .Lcta_scan
+.Lcta_decide:
+    cmp dl, 'y'
+    je .Lcta_save
+    cmp dl, 'Y'
+    jne .Lcta_no
+.Lcta_save:
+    mov rdi, rbx
+    call config_trust_save
+    test rax, rax
+    js .Lcta_no
+    mov eax, 1
+    EPILOGUE
+.Lcta_known:
+    mov rdi, rbx
+    call config_trusted
+    EPILOGUE
+.Lcta_no:
+    xor eax, eax
+    EPILOGUE
+
 # config_load() -> 0.  Reads the user config, then the project config when
 # config_trusted(cwd) is set.  Missing files are not errors; malformed JSONC
 # warns and is ignored.
@@ -1296,6 +1439,8 @@ FN config_load
     call os_getcwd
     test rax, rax
     js .Lcl_done
+    lea rdi, [rsp + 32]
+    call config_trust_ask
     lea rdi, [rsp + 32]
     call config_trusted
     test eax, eax

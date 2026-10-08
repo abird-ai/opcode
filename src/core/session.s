@@ -2301,3 +2301,232 @@ FN session_find_id
 .Lfi_zero:
     xor eax, eax
     EPILOGUE
+
+# ================================================================ session_list
+# session_list(dir|0, cwd|0) -> count | 0.  Lists the cwd's known sessions,
+# newest first, as "<id> <timestamp_ms> <path>" on stdout.  The dir/cwd
+# resolution mirrors session_find_latest: an explicit --session-dir is used
+# verbatim, otherwise the default per-cwd directory is resolved.
+.equ SL_MAX, 512
+
+.section .bss
+.p2align 3
+sl_ts:   .zero 8 * SL_MAX       # unix-ms timestamp per entry
+sl_path: .zero 8 * SL_MAX       # mem_alloc'd full path per entry
+sl_id:   .zero 16 * SL_MAX      # 8-char id + NUL per entry
+
+.section .rodata
+.Lsl_space: .asciz " "
+.Lsl_nl:    .byte 10
+
+.text
+
+# .Lsl_write(ptr rdi, len rsi): write to stdout (fd 1)
+.Lsl_write:
+    mov rdx, rsi
+    mov rsi, rdi
+    mov edi, 1
+    jmp write_all
+
+FN session_list
+    PROLOGUE 96
+    mov qword ptr [rsp], 0          # count
+    call .Lresolve_dir
+    test rax, rax
+    jz .Lslist_zero
+    mov r12, rax                    # dir (owned)
+    mov rdi, r12
+    mov esi, O_RDONLY | O_DIRECTORY | O_CLOEXEC
+    xor edx, edx
+    call os_open
+    test rax, rax
+    js .Lslist_freedir
+    mov r13, rax                    # dirfd
+    mov edi, 32768
+    call mem_alloc
+    mov r14, rax                    # getdents buffer
+.Lslist_read:
+    mov edi, r13d
+    mov rsi, r14
+    mov edx, 32768
+    call os_getdents
+    test rax, rax
+    js .Lslist_scan_done
+    jz .Lslist_scan_done
+    mov [rsp + 8], rax              # bytes
+    xor r15d, r15d                  # offset
+.Lslist_rec:
+    cmp r15, [rsp + 8]
+    jae .Lslist_read
+    lea rcx, [r14 + r15]
+    movzx eax, word ptr [rcx + 16]  # d_reclen
+    test eax, eax
+    jz .Lslist_scan_done
+    mov [rsp + 16], rax
+    lea rbx, [rcx + 19]             # d_name
+    mov rdi, rbx
+    call strlen
+    mov r8, rax                     # name length
+    cmp r8, 16
+    jb .Lslist_next
+    lea rdi, [rbx + r8 - 6]
+    lea rsi, [rip + .Ljsonl]
+    mov edx, 6
+    call memeq
+    cmp eax, 1
+    jne .Lslist_next
+    # "<ms>_<id8>.jsonl": parse the ms prefix and require the exact suffix
+    mov rdi, rbx
+    mov rsi, r8
+    call parse_u64
+    test rdx, rdx
+    jz .Lslist_next
+    cmp byte ptr [rbx + rdx], '_'
+    jne .Lslist_next
+    lea rcx, [rdx + 15]
+    cmp rcx, r8
+    jne .Lslist_next
+    mov [rsp + 32], rax             # timestamp
+    mov [rsp + 40], rdx             # digits consumed
+    mov rcx, [rsp]
+    cmp rcx, SL_MAX
+    jae .Lslist_next
+    mov rdi, r12
+    mov rsi, rbx
+    call .Lpath_join
+    test rax, rax
+    jz .Lslist_next
+    mov rcx, [rsp]
+    lea rsi, [rip + sl_path]
+    mov [rsi + rcx*8], rax
+    lea rsi, [rip + sl_ts]
+    mov rdx, [rsp + 32]
+    mov [rsi + rcx*8], rdx
+    mov rdx, [rsp + 40]
+    lea rsi, [rbx + rdx + 1]
+    mov rdi, rcx
+    shl rdi, 4
+    lea rdx, [rip + sl_id]
+    add rdi, rdx
+    mov edx, 8
+    call memcpy
+    mov byte ptr [rax + 8], 0
+    inc qword ptr [rsp]
+.Lslist_next:
+    add r15, [rsp + 16]
+    jmp .Lslist_rec
+.Lslist_scan_done:
+    mov edi, r13d
+    call os_close
+    mov rdi, r14
+    call mem_free
+    # insertion sort, descending timestamp (equal keys keep directory order)
+    mov r15, [rsp]
+    mov r14, 1
+.Lslist_sort_i:
+    cmp r14, r15
+    jae .Lslist_print
+    lea rax, [rip + sl_ts]
+    mov r8, [rax + r14*8]
+    lea rax, [rip + sl_path]
+    mov r9, [rax + r14*8]
+    mov r10, r14
+    shl r10, 4
+    lea rax, [rip + sl_id]
+    add r10, rax
+    mov rbx, [r10]                  # save the key id value (not its address)
+    mov r11, [r10 + 8]              # before the shift overwrites sl_id[i]
+    mov rcx, r14
+.Lslist_sort_shift:
+    test rcx, rcx
+    jz .Lslist_sort_place
+    lea rax, [rip + sl_ts]
+    mov rdx, [rax + rcx*8 - 8]
+    cmp rdx, r8
+    jae .Lslist_sort_place
+    mov [rax + rcx*8], rdx
+    lea rax, [rip + sl_path]
+    mov rdx, [rax + rcx*8 - 8]
+    mov [rax + rcx*8], rdx
+    mov rdx, rcx
+    shl rdx, 4
+    lea rax, [rip + sl_id]
+    add rax, rdx
+    mov rsi, rax
+    sub rsi, 16
+    mov rdi, [rsi]
+    mov [rax], rdi
+    mov rdi, [rsi + 8]
+    mov [rax + 8], rdi
+    dec rcx
+    jmp .Lslist_sort_shift
+.Lslist_sort_place:
+    lea rax, [rip + sl_ts]
+    mov [rax + rcx*8], r8
+    lea rax, [rip + sl_path]
+    mov [rax + rcx*8], r9
+    mov rdx, rcx
+    shl rdx, 4
+    lea rax, [rip + sl_id]
+    add rax, rdx
+    mov [rax], rbx
+    mov [rax + 8], r11
+    inc r14
+    jmp .Lslist_sort_i
+.Lslist_print:
+    mov r15, [rsp]
+    xor r14d, r14d
+.Lslist_print_loop:
+    cmp r14, r15
+    jae .Lslist_done
+    mov rax, r14
+    shl rax, 4
+    lea rbx, [rip + sl_id]
+    add rbx, rax
+    mov rdi, rbx
+    call strlen
+    mov rdi, rbx
+    mov rsi, rax
+    call .Lsl_write
+    lea rdi, [rip + .Lsl_space]
+    mov esi, 1
+    call .Lsl_write
+    lea rax, [rip + sl_ts]
+    mov rsi, [rax + r14*8]
+    lea rdi, [rsp + 48]             # number scratch (keeps [rsp] count intact)
+    call fmt_u64
+    lea rdi, [rsp + 48]
+    mov rsi, rax
+    call .Lsl_write
+    lea rdi, [rip + .Lsl_space]
+    mov esi, 1
+    call .Lsl_write
+    lea rax, [rip + sl_path]
+    mov rbx, [rax + r14*8]
+    mov rdi, rbx
+    call strlen
+    mov rdi, rbx
+    mov rsi, rax
+    call .Lsl_write
+    lea rdi, [rip + .Lsl_nl]
+    mov esi, 1
+    call .Lsl_write
+    inc r14
+    jmp .Lslist_print_loop
+.Lslist_done:
+    xor r14d, r14d
+    mov r15, [rsp]
+.Lslist_free_loop:
+    cmp r14, r15
+    jae .Lslist_freedir
+    lea rax, [rip + sl_path]
+    mov rdi, [rax + r14*8]
+    call mem_free
+    inc r14
+    jmp .Lslist_free_loop
+.Lslist_freedir:
+    mov rdi, r12
+    call mem_free
+.Lslist_zero:
+    mov rax, [rsp]
+    EPILOGUE

@@ -522,6 +522,15 @@ FN cli_parse
     mov eax, 2
     EPILOGUE
 .Lcp_ok:
+    # The interactive project-trust prompt is only for the TUI, and never for
+    # the headless/scripted/capture variants; the core checks the TTY itself.
+    xor eax, eax
+    cmp dword ptr [rip + cl_kind], CK_TUI
+    jne 1f
+    cmp qword ptr [rip + g_tui_headless], 0
+    jne 1f
+    mov eax, 1
+1:  mov [rip + g_config_interactive], rax
     xor eax, eax
     EPILOGUE
 # .Lcp_badline(prefix rdi, token rsi): "opcode: ...TOKEN\n"

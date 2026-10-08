@@ -8,6 +8,7 @@
 .Lopt_version:  .asciz "--version"
 .Lopt_help:     .asciz "--help"
 .Lopt_h:        .asciz "-h"
+.Lopt_list:     .asciz "--list-sessions"
 .Lcmd_fetch:    .asciz "fetch"
 .Lcmd_login:    .asciz "login"
 .Lcmd_logout:   .asciz "logout"
@@ -25,6 +26,7 @@
     .ascii "options:\n"
     .ascii "  --version   print version and exit\n"
     .ascii "  --help      print this help and exit\n"
+    .ascii "  --list-sessions   list this directory's sessions (newest first) and exit\n"
     .ascii "  -p PROMPT   run the agent on PROMPT and print the answer\n"
     .ascii "  login [provider]    OAuth login (openai, anthropic)\n"
     .ascii "  logout [provider]   remove stored credentials\n"
@@ -139,6 +141,11 @@ FN opcode_main
     call cstr_eq
     test eax, eax
     jnz .Lusage_out
+    mov rdi, [r13 + 8]
+    lea rsi, [rip + .Lopt_list]
+    call cstr_eq
+    test eax, eax
+    jnz .Llist_sessions
     # no other subcommand: interactive TUI (flags are parsed there)
 .Ltui:
     lea rdi, [r12 - 1]
@@ -155,6 +162,16 @@ FN opcode_main
     mov edi, 1
     lea rsi, [rip + .Lnl]
     call out_cstr
+    xor eax, eax
+    EPILOGUE
+.Llist_sessions:
+    # --list-sessions: print the cwd's sessions (newest first) and exit 0
+    # without starting the agent.  config_load first so a configured
+    # session_dir is honoured, matching --continue/--session resolution.
+    call config_load
+    xor edi, edi
+    xor esi, esi
+    call session_list
     xor eax, eax
     EPILOGUE
 .Llogin:
