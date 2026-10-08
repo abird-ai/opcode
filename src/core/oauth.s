@@ -12,7 +12,11 @@
 #   g_oauth_no_browser quad   != 0 -> print the authorize URL instead of
 #                             spawning xdg-open (CLI --no-browser / tests)
 #   oauth_login(provider cstr)      -> 0 | -errno
+#   oauth_login_manual(provider cstr) -> 0 | -errno
+#                             paste-code login, no loopback/browser (--manual)
 #   oauth_logout(provider cstr)     -> 0 | -errno
+#                             removes the provider's oauth credential and its
+#                             stored api_key (provider object dropped when empty)
 #   oauth_access_token(provider)    -> mem_alloc'd cstr | 0
 #   oauth_last (quad)               1 when the last oauth_access_token() hit
 #   oauth_sha256(out32, ptr, len)   SHA-256 (exposed for tests)
@@ -104,7 +108,12 @@
 .equ OL_WAITNS,    8632   # overall callback wait budget (ns)
 .equ OL_DUAL,      8640   # 1 -> bind the loopback dual-stack (localhost)
 .equ OL_LFD2,      8648   # second loopback listener (-1 when only one bound)
-.equ OL_FRAME,     8704
+.equ OL_MANUAL,    8688   # 1 -> --manual paste flow (no loopback listener)
+.equ OL_PCODE,     8696   # pasted authorization code (ptr into OL_REQBUF)
+.equ OL_PCODELEN,  8704
+.equ OL_PSTATE,    8712   # pasted state, when the redirect URL carried one
+.equ OL_PSTATELEN, 8720
+.equ OL_FRAME,     8736
 
 # oauth_logout / oauth_access_token frame (shared)
 .equ OG_OLD,       0      # 24 SB
@@ -139,6 +148,7 @@ g_oauth_scope:     .zero 8
 g_oauth_no_browser: .zero 8
 oauth_last:        .zero 8
 oauth_present:     .zero 8   # 1 when the provider has a stored OAuth entry
+oa_manual:         .zero 8   # 1 -> oauth_login runs the paste flow (--manual)
 oa_body_overflow:  .zero 8   # 1 when the token body exceeded OAUTH_BODY_MAX
 
 .section .rodata
@@ -156,6 +166,7 @@ oa_body_overflow:  .zero 8   # 1 when the token body exceeded OAUTH_BODY_MAX
 .Ldef_client_openai:    .asciz "app_EMoamEEZ73f0CkXaXp7hrann"
 .Ldef_scope_openai:     .asciz "openid profile email offline_access"
 .Lredir_localhost:      .asciz "http://localhost:"
+.Lredir_localhost_np:   .asciz "http://localhost"
 .Lredir_default:        .asciz "http://127.0.0.1:"
 .Lpath_callback:        .asciz "/callback"
 .Lpath_auth_callback:   .asciz "/auth/callback"
@@ -222,6 +233,7 @@ oa_body_overflow:  .zero 8   # 1 when the token body exceeded OAUTH_BODY_MAX
 .Lkey_exp:      .asciz "expires_at"
 .Lkey_acct:     .asciz "account_id"
 .Lkey_oauth:    .asciz "oauth"
+.Lkey_api:      .asciz "api_key"
 .Lkey_account:  .asciz "account"
 .Lkey_uuid:     .asciz "uuid"
 .Lkey_expi:     .asciz "expires_in"
@@ -285,6 +297,9 @@ oa_body_overflow:  .zero 8   # 1 when the token body exceeded OAUTH_BODY_MAX
 .Lo_denied:     .asciz "authorization denied"
 .Lo_tokfail:    .asciz "token endpoint returned status "
 .Lo_timeout:    .asciz "timed out waiting for the browser callback"
+.Lo_paste_prompt:  .asciz "Paste the authorization code (or the full redirect URL from the browser's address bar): "
+.Lo_paste_nostate: .asciz "the pasted code is missing its state; paste the full redirect URL"
+.Lo_state_mismatch: .asciz "oauth state mismatch"
 .Lenv_wait_ms:  .asciz "OPCODE_OAUTH_WAIT_MS"
 .p2align 3
 .Lhinit:
@@ -1165,6 +1180,30 @@ FN oauth_sha256
     mov rax, r12
     EPILOGUE
 
+# .Lmk_redirect_np(host cstr, path cstr) -> mem_alloc'd cstr | 0
+.Lmk_redirect_np:
+    PROLOGUE 32
+    mov r12, rdi
+    mov r13, rsi
+    xor eax, eax
+    mov [rsp], rax
+    mov [rsp + 8], rax
+    mov [rsp + 16], rax
+    lea rdi, [rsp]
+    mov rsi, r12
+    call sb_push_cstr
+    lea rdi, [rsp]
+    mov rsi, r13
+    call sb_push_cstr
+    mov rdi, [rsp + SB_ptr]
+    mov rsi, [rsp + SB_len]
+    call mem_dup
+    mov r12, rax
+    lea rdi, [rsp]
+    call sb_free
+    mov rax, r12
+    EPILOGUE
+
 # .Lbuild_authorize_url(auth_url, client_id, redirect, state, challenge, scope,
 #                       [rbp+16] extra) -> cstr
 .Lbuild_authorize_url:
@@ -1542,6 +1581,196 @@ FN oauth_sha256
     jmp 1b
 9:  mov rax, r8
     ret
+
+# .Ltrim(ptr, len) -> rax ptr, rdx len.  Strips leading/trailing ASCII space,
+# tab, CR and LF.  Leaf.
+.Ltrim:
+    test rsi, rsi
+    jz .Ltrim_done
+.Ltrim_lead:
+    movzx eax, byte ptr [rdi]
+    cmp al, ' '
+    je .Ltrim_lead_adv
+    cmp al, 9
+    je .Ltrim_lead_adv
+    cmp al, 13
+    je .Ltrim_lead_adv
+    cmp al, 10
+    je .Ltrim_lead_adv
+    jmp .Ltrim_tail
+.Ltrim_lead_adv:
+    inc rdi
+    dec rsi
+    jnz .Ltrim_lead
+    jmp .Ltrim_done
+.Ltrim_tail:
+    movzx eax, byte ptr [rdi + rsi - 1]
+    cmp al, ' '
+    je .Ltrim_tail_adv
+    cmp al, 9
+    je .Ltrim_tail_adv
+    cmp al, 13
+    je .Ltrim_tail_adv
+    cmp al, 10
+    je .Ltrim_tail_adv
+    jmp .Ltrim_done
+.Ltrim_tail_adv:
+    dec rsi
+    jnz .Ltrim_tail
+.Ltrim_done:
+    mov rax, rdi
+    mov rdx, rsi
+    ret
+
+# .Lread_line(buf, cap) -> rax bytes read (terminator stripped), 0 at EOF,
+# -errno on failure.  Reads one byte at a time so a CR/LF is never consumed
+# past the line.
+.Lread_line:
+    PROLOGUE 16
+    mov rbx, rdi
+    mov r12, rsi
+    xor r13d, r13d
+.Lrl_loop:
+    cmp r13, r12
+    jae .Lrl_done
+    xor edi, edi
+    lea rsi, [rbx + r13]
+    mov edx, 1
+    call os_read
+    cmp rax, -EINTR
+    je .Lrl_loop
+    test rax, rax
+    js .Lrl_ret
+    jz .Lrl_done
+    mov al, [rbx + r13]
+    cmp al, 10
+    je .Lrl_done
+    cmp al, 13
+    je .Lrl_done
+    inc r13
+    jmp .Lrl_loop
+.Lrl_done:
+    mov rax, r13
+.Lrl_ret:
+    EPILOGUE
+
+# .Lparse_pasted(buf, len, &code, &codelen, &state, &statelen) -> eax 1|0.
+# Accepts a full redirect URL, a bare query ("code=..&state=.."), "code#state",
+# or a bare code.  Returned pointers alias buf; values are URL-decoded in place.
+.Lparse_pasted:
+    PROLOGUE 48
+    mov [rsp + 0], rdx
+    mov [rsp + 8], rcx
+    mov [rsp + 16], r8
+    mov [rsp + 24], r9
+    xor eax, eax
+    mov rdx, [rsp + 0]
+    mov [rdx], rax
+    mov rdx, [rsp + 8]
+    mov [rdx], rax
+    mov rdx, [rsp + 16]
+    mov [rdx], rax
+    mov rdx, [rsp + 24]
+    mov [rdx], rax
+    call .Ltrim
+    mov rbx, rax
+    mov r12, rdx
+    test r12, r12
+    jz .Lpp_none
+    xor r13d, r13d
+.Lpp_scan:
+    cmp r13, r12
+    jae .Lpp_noq
+    mov al, [rbx + r13]
+    cmp al, '?'
+    je .Lpp_q
+    cmp al, '#'
+    je .Lpp_hash
+    inc r13
+    jmp .Lpp_scan
+.Lpp_noq:
+    cmp r12, 5
+    jb .Lpp_bare
+    cmp byte ptr [rbx], 'c'
+    jne .Lpp_bare
+    cmp byte ptr [rbx + 1], 'o'
+    jne .Lpp_bare
+    cmp byte ptr [rbx + 2], 'd'
+    jne .Lpp_bare
+    cmp byte ptr [rbx + 3], 'e'
+    jne .Lpp_bare
+    cmp byte ptr [rbx + 4], '='
+    jne .Lpp_bare
+    mov r14, rbx
+    mov r15, r12
+    jmp .Lpp_query
+.Lpp_q:
+    lea r14, [rbx + r13 + 1]
+    mov r15, r12
+    sub r15, r13
+    dec r15
+    jmp .Lpp_query
+.Lpp_hash:
+    mov rdi, [rsp + 0]
+    mov [rdi], rbx
+    mov rdi, [rsp + 8]
+    mov [rdi], r13
+    lea rax, [rbx + r13 + 1]
+    mov rdi, [rsp + 16]
+    mov [rdi], rax
+    mov rcx, r12
+    sub rcx, r13
+    dec rcx
+    mov rdi, [rsp + 24]
+    mov [rdi], rcx
+    mov eax, 1
+    EPILOGUE
+.Lpp_bare:
+    mov rdi, [rsp + 0]
+    mov [rdi], rbx
+    mov rdi, [rsp + 8]
+    mov [rdi], r12
+    mov eax, 1
+    EPILOGUE
+.Lpp_query:
+    mov [rsp + 32], r14
+    mov [rsp + 40], r15
+    mov rdi, r14
+    mov rsi, r15
+    lea rdx, [rip + .Lqs_code]
+    call .Lqparam
+    test rax, rax
+    jz .Lpp_none
+    mov r13, rax
+    mov rbx, rdx
+    mov rdi, r13
+    mov rsi, rbx
+    call .Lurldecode
+    mov rdi, [rsp + 0]
+    mov [rdi], r13
+    mov rdi, [rsp + 8]
+    mov [rdi], rax
+    mov rdi, [rsp + 32]
+    mov rsi, [rsp + 40]
+    lea rdx, [rip + .Lqs_state]
+    call .Lqparam
+    test rax, rax
+    jz .Lpp_ok
+    mov r13, rax
+    mov rbx, rdx
+    mov rdi, r13
+    mov rsi, rbx
+    call .Lurldecode
+    mov rdi, [rsp + 16]
+    mov [rdi], r13
+    mov rdi, [rsp + 24]
+    mov [rdi], rax
+.Lpp_ok:
+    mov eax, 1
+    EPILOGUE
+.Lpp_none:
+    xor eax, eax
+    EPILOGUE
 
 # .Lhandle_request(cfd, state, slen, buf, cap, out4;
 #                  [rbp+16] path, [rbp+24] pathlen, [rbp+32] listen fd)
@@ -2229,6 +2458,14 @@ oa_body_cb:
     EPILOGUE
 
 # ------------------------------------------------------------------ login
+# oauth_login_manual(provider cstr) -> 0|-errno.  Same PKCE/state/token
+# machinery as oauth_login, but never opens a loopback listener: it prints the
+# authorize URL and reads the pasted authorization code (or full redirect URL)
+# from stdin.  Used for remote/headless logins (--manual / --paste).
+FN oauth_login_manual
+    mov qword ptr [rip + oa_manual], 1
+    jmp oauth_login
+
 FN oauth_login
     PROLOGUE OL_FRAME
     mov r15, rdi
@@ -2255,6 +2492,9 @@ FN oauth_login
     mov qword ptr [rsp + OL_LFD], -1
     mov qword ptr [rsp + OL_LFD2], -1
     mov qword ptr [rsp + OL_CFD], -1
+    mov rax, [rip + oa_manual]
+    mov qword ptr [rip + oa_manual], 0
+    mov [rsp + OL_MANUAL], rax
     # resolve config
     mov rdi, r15
     xor esi, esi
@@ -2336,6 +2576,8 @@ FN oauth_login
     js .Lol_err_rax
     mov qword ptr [rsp + OL_SLEN], 22
 .Lol_state_ok:
+    cmp qword ptr [rsp + OL_MANUAL], 0
+    jne .Lol_paste_redir
     # loopback server (fixed port for built-in providers, else ephemeral)
     mov edi, [rsp + OL_BPORT]
     mov esi, [rsp + OL_DUAL]
@@ -2349,6 +2591,23 @@ FN oauth_login
     mov esi, edx
     mov rdx, [rsp + OL_PATH]
     call .Lmk_redirect
+    jmp .Lol_redir_done
+.Lol_paste_redir:
+    # --manual: no listener.  Use the redirect URI registered for the client:
+    # the fixed loopback port when there is one, else a bare http://localhost
+    # path (the custom/overridden auth URL case).
+    cmp qword ptr [rip + g_oauth_auth_url], 0
+    jne .Lol_paste_generic
+    mov rdi, [rsp + OL_HOST]
+    mov esi, [rsp + OL_BPORT]
+    mov rdx, [rsp + OL_PATH]
+    call .Lmk_redirect
+    jmp .Lol_redir_done
+.Lol_paste_generic:
+    lea rdi, [rip + .Lredir_localhost_np]
+    mov rsi, [rsp + OL_PATH]
+    call .Lmk_redirect_np
+.Lol_redir_done:
     test rax, rax
     jz .Lol_nomem
     mov [rsp + OL_REDIR], rax
@@ -2367,12 +2626,14 @@ FN oauth_login
     test rax, rax
     jz .Lol_nomem
     mov [rsp + OL_AURL], rax
+    cmp qword ptr [rsp + OL_MANUAL], 0
+    jne .Lol_do_paste
     cmp qword ptr [rip + g_oauth_no_browser], 0
-    jne .Lol_manual
+    jne .Lol_print_url
     mov rdi, rax
     call .Lopen_browser
     jmp .Lol_wait
-.Lol_manual:
+.Lol_print_url:
     mov rdi, [rsp + OL_AURL]
     call strlen
     mov rsi, rax
@@ -2382,6 +2643,71 @@ FN oauth_login
     lea rsi, [rip + .Lnl]
     mov edx, 1
     call write_all
+    jmp .Lol_wait
+.Lol_do_paste:
+    # print the authorize URL, read one pasted line, then exchange it
+    mov rdi, [rsp + OL_AURL]
+    call strlen
+    mov rsi, rax
+    mov rdi, [rsp + OL_AURL]
+    call oa_eputs_safe
+    mov edi, 2
+    lea rsi, [rip + .Lnl]
+    mov edx, 1
+    call write_all
+    lea rdi, [rip + .Lo_paste_prompt]
+    call oa_eputs
+    lea rdi, [rsp + OL_REQBUF]
+    mov esi, OAUTH_READ_BUF
+    call .Lread_line
+    test rax, rax
+    jle .Lol_paste_nocode
+    lea rdi, [rsp + OL_REQBUF]
+    mov rsi, rax
+    lea rdx, [rsp + OL_PCODE]
+    lea rcx, [rsp + OL_PCODELEN]
+    lea r8, [rsp + OL_PSTATE]
+    lea r9, [rsp + OL_PSTATELEN]
+    call .Lparse_pasted
+    test eax, eax
+    jz .Lol_paste_nocode
+    mov rax, [rsp + OL_PSTATELEN]
+    test rax, rax
+    jz .Lol_paste_no_state
+    cmp rax, [rsp + OL_SLEN]
+    jne .Lol_paste_state_bad
+    mov rdi, [rsp + OL_PSTATE]
+    lea rsi, [rsp + OL_STATE]
+    mov rdx, rax
+    call memeq
+    test eax, eax
+    jz .Lol_paste_state_bad
+    jmp .Lol_paste_go
+.Lol_paste_no_state:
+    # Anthropic binds the code to the PKCE verifier through the state; without
+    # it the full redirect URL must be pasted.
+    test dword ptr [rsp + OL_FLAGS], OPF_STATE_VERIFIER
+    jz .Lol_paste_go
+    lea rdi, [rip + .Lo_paste_nostate]
+    call oa_err
+    mov r14, -EINVAL
+    jmp .Lol_ret
+.Lol_paste_state_bad:
+    lea rdi, [rip + .Lo_state_mismatch]
+    call oa_err
+    mov r14, -EACCES
+    jmp .Lol_ret
+.Lol_paste_nocode:
+    lea rdi, [rip + .Lo_nocode]
+    call oa_err
+    mov r14, -EINVAL
+    jmp .Lol_ret
+.Lol_paste_go:
+    mov rax, [rsp + OL_PCODE]
+    mov [rsp + OL_OUT], rax
+    mov rax, [rsp + OL_PCODELEN]
+    mov [rsp + OL_OUT + 8], rax
+    jmp .Lol_callback
 .Lol_wait:
     mov edi, CLOCK_MONOTONIC
     call os_now_ns
@@ -2834,7 +3160,17 @@ FN oauth_logout
     lea rsi, [rip + .Lkey_oauth]
     call .Ljv_key_eq
     test eax, eax
-    jz .Lolog_keep_prov
+    jnz .Lolog_has_next
+    mov rax, [r14 + JV_ptr]
+    mov rcx, r12
+    shl rcx, 4
+    mov rdi, [rax + rcx]
+    lea rsi, [rip + .Lkey_api]
+    call .Ljv_key_eq
+    test eax, eax
+    jnz .Lolog_has_next
+    jmp .Lolog_keep_prov
+.Lolog_has_next:
     inc r12d
     jmp .Lolog_has
 .Lolog_keep_prov:
@@ -2856,6 +3192,11 @@ FN oauth_logout
     mov [rsp + OG_VAL], rdx
     mov rdi, rsi
     lea rsi, [rip + .Lkey_oauth]
+    call .Ljv_key_eq
+    test eax, eax
+    jnz .Lolog_prov_next
+    mov rdi, [rsp + OG_KEY]
+    lea rsi, [rip + .Lkey_api]
     call .Ljv_key_eq
     test eax, eax
     jnz .Lolog_prov_next

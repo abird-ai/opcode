@@ -515,7 +515,7 @@ apid=""
 
 # ---------------------------------------------------------------- logout
 out=$(timeout 30 ./build/opcode logout anthropic)
-contains oauth-logout-msg "logged out of anthropic" "$out"
+contains oauth-logout-msg "removed stored credential for anthropic" "$out"
 python3 - "$authf" <<'PY'
 import json, sys
 d = json.load(open(sys.argv[1]))
@@ -523,14 +523,17 @@ assert "anthropic" not in d, d
 assert d["openai"]["api_key"] == "KEEP-ME", d
 print("ok   oauth-logout-keeps-other")
 PY
-# provider without oauth keeps its api_key
+# logout clears both the OAuth credential and the stored api_key, so a provider
+# that only had an api_key is dropped entirely
 out=$(timeout 30 ./build/opcode logout openai)
-contains oauth-logout-openai "logged out of openai" "$out"
+contains oauth-logout-openai "removed stored credential for openai" "$out"
 python3 - "$authf" <<'PY'
-import json, sys
-d = json.load(open(sys.argv[1]))
-assert d["openai"]["api_key"] == "KEEP-ME", d
-print("ok   oauth-logout-openai-keeps-key")
+import json, os, sys
+path = sys.argv[1]
+if os.path.exists(path):
+    d = json.load(open(path))
+    assert "openai" not in d or "api_key" not in d.get("openai", {}), d
+print("ok   oauth-logout-openai-clears-key")
 PY
 
 # ---------------------------------------------------------------- expiry

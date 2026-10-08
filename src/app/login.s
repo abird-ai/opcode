@@ -7,15 +7,22 @@
 .Lopt_client:  .asciz "--oauth-client-id"
 .Lopt_scope:   .asciz "--oauth-scope"
 .Lopt_nobrow:  .asciz "--no-browser"
+.Lopt_manual:  .asciz "--manual"
+.Lopt_paste:   .asciz "--paste"
 .Ldef_prov:    .asciz "openai"
 .Lcmd_login:   .asciz "login"
-.Lerr_usage:   .asciz "usage: opcode login|logout [provider] [--oauth-auth-url URL] [--oauth-token-url URL] [--oauth-client-id ID] [--oauth-scope S] [--no-browser]"
+.Lerr_usage:   .asciz "usage: opcode login|logout [provider] [--manual|--paste] [--oauth-auth-url URL] [--oauth-token-url URL] [--oauth-client-id ID] [--oauth-scope S] [--no-browser]"
+.Lmsg_deflt:   .asciz "default provider set to "
+.Lmsg_removed: .asciz "removed stored credential for "
+.Lmsg_nocfg:   .asciz "note: could not set the default provider\n"
+.Lempty:       .asciz ""
 .Lnl:          .asciz "\n"
 
 .bss
 .p2align 3
 l_provider: .zero 8
 l_cmd:      .zero 8
+l_manual:   .zero 8
 
 .text
 
@@ -87,6 +94,16 @@ FN opcode_login_main
     call cstr_eq
     test eax, eax
     jnz .Lll_nobrow
+    mov rdi, rbx
+    lea rsi, [rip + .Lopt_manual]
+    call cstr_eq
+    test eax, eax
+    jnz .Lll_paste
+    mov rdi, rbx
+    lea rsi, [rip + .Lopt_paste]
+    call cstr_eq
+    test eax, eax
+    jnz .Lll_paste
     jmp .Lll_usage
 .Lll_auth:
     inc r12
@@ -119,6 +136,9 @@ FN opcode_login_main
 .Lll_nobrow:
     mov qword ptr [rip + g_oauth_no_browser], 1
     jmp .Lll_next
+.Lll_paste:
+    mov qword ptr [rip + l_manual], 1
+    jmp .Lll_next
 .Lll_provider:
     mov [rip + l_provider], rbx
 .Lll_next:
@@ -129,17 +149,61 @@ FN opcode_login_main
     lea rsi, [rip + .Lcmd_login]
     call cstr_eq
     test eax, eax
-    jz 1f
+    jz .Lll_logout
     mov rdi, [rip + l_provider]
+    cmp qword ptr [rip + l_manual], 0
+    je .Lll_login_browser
+    call oauth_login_manual
+    jmp .Lll_login_done
+.Lll_login_browser:
     call oauth_login
-    jmp 2f
-1:  mov rdi, [rip + l_provider]
-    call oauth_logout
-2:  test rax, rax
-    js 3f
+.Lll_login_done:
+    test rax, rax
+    js .Lll_fail
+    # make the provider just authenticated the default, so the next plain
+    # start uses it (config_save merges, preserving every other key)
+    mov rdi, [rip + l_provider]
+    lea rsi, [rip + .Lempty]
+    xor edx, edx
+    call config_save
+    test rax, rax
+    js .Lll_cfg_note
+    mov edi, 1
+    lea rsi, [rip + .Lmsg_deflt]
+    call out_cstr
+    mov edi, 1
+    mov rsi, [rip + l_provider]
+    call out_cstr
+    mov edi, 1
+    lea rsi, [rip + .Lnl]
+    call out_cstr
     xor eax, eax
     EPILOGUE
-3:  mov eax, 1
+.Lll_cfg_note:
+    mov edi, 2
+    lea rsi, [rip + .Lmsg_nocfg]
+    call out_cstr
+    xor eax, eax
+    EPILOGUE
+.Lll_logout:
+    # removes the stored OAuth credential and clears the stored api_key
+    mov rdi, [rip + l_provider]
+    call oauth_logout
+    test rax, rax
+    js .Lll_fail
+    mov edi, 1
+    lea rsi, [rip + .Lmsg_removed]
+    call out_cstr
+    mov edi, 1
+    mov rsi, [rip + l_provider]
+    call out_cstr
+    mov edi, 1
+    lea rsi, [rip + .Lnl]
+    call out_cstr
+    xor eax, eax
+    EPILOGUE
+.Lll_fail:
+    mov eax, 1
     EPILOGUE
 .Lll_usage:
     mov edi, 2
