@@ -273,6 +273,12 @@ t_md_live_on:     .zero 4
 t_in_rows:        .zero 4
 t_in_commit:      .zero 4
 t_in_live_base:   .zero 4
+# Progressive inline commit: t_in_offset counts the view rows at the top that
+# were already printed to scrollback (0 after a rebuild, the committed prefix
+# height after a mid-stream commit); t_in_base_len is the transcript length the
+# view prefix rendered up to, so a grow can force a rebuild before committing.
+t_in_offset:      .zero 4
+t_in_base_len:    .zero 4
 t_in_cw:          .zero 16384
 
 .text
@@ -1706,10 +1712,12 @@ FN inline_row_width
 .Lirw_ret:
     EPILOGUE
 
-# inline_emit_committed(): print the view rows [0, t_in_live_base) that belong
-# to the finished transcript prefix into scrollback exactly once, each under a
-# full-line clear and a CRLF.  One write.  Called only when the agent is idle,
-# so no live block is ever printed and nothing is printed twice.
+# inline_emit_committed(): print the view rows [t_in_offset, t_in_live_base)
+# that belong to the finished transcript prefix into scrollback exactly once,
+# each under a full-line clear and a CRLF.  One write.  The caller advances
+# t_in_commit/t_in_offset; the live tail (a_msg + unmatched cards) starts at
+# t_in_live_base and is never printed.  Can run while the agent is busy: the
+# committed rows are whole finished messages, so nothing is printed twice.
 FN inline_emit_committed
     PROLOGUE 16
     lea rdi, [rip + t_osb]
@@ -1722,7 +1730,7 @@ FN inline_emit_committed
     mov ecx, [rip + t_w]
     mov r8d, 1
     call view_set_vp
-    xor r12d, r12d
+    mov r12d, [rip + t_in_offset]
 .Liec_loop:
     cmp r12d, [rip + t_in_live_base]
     jae .Liec_done
@@ -1752,32 +1760,174 @@ FN inline_emit_committed
     call tui_write_all
     EPILOGUE
 
+# tui_commit_prefix_len(rdi=TR_msgs VEC*, esi=from) -> eax: the largest message
+# index >= from such that every message in [from, eax) is finished.  A message
+# stays live while one of its tool cards is still running, so a progressive
+# commit must stop before it.  Streaming assistant text is not a block in the
+# transcript yet, so it never appears here.
+FN tui_commit_prefix_len
+    PROLOGUE 16
+    mov r12, rdi                # VEC* of Msg*
+    mov r13d, esi               # from
+.Lcpl_loop:
+    cmp r13d, [r12 + VEC_len]
+    jae .Lcpl_done
+    mov rax, [r12 + VEC_ptr]
+    mov rdi, [rax + r13*8]      # Msg*
+    test rdi, rdi
+    jz .Lcpl_next
+    mov rax, [rdi + M_blocks]
+    test rax, rax
+    jz .Lcpl_next
+    mov r15, rax                # VEC* of Block
+    mov dword ptr [rbp - 48], 0
+.Lcpl_blk:
+    mov eax, [rbp - 48]
+    cmp rax, [r15 + VEC_len]
+    jae .Lcpl_next
+    mov rax, [r15 + VEC_ptr]
+    mov ecx, [rbp - 48]
+    imul rcx, rcx, B_SIZE
+    add rax, rcx
+    cmp dword ptr [rax + B_type], BT_TOOLCALL
+    jne .Lcpl_bnext
+    mov rdi, [rax + B_ptr]      # ToolCall*
+    test rdi, rdi
+    jz .Lcpl_bnext
+    mov rsi, [rdi + TC_id]
+    test rsi, rsi
+    jz .Lcpl_bnext
+    lea rdi, [rip + t_chat]
+    call chat_find
+    test rax, rax
+    jz .Lcpl_bnext
+    cmp dword ptr [rax + CD_running], 0
+    jne .Lcpl_done
+.Lcpl_bnext:
+    inc dword ptr [rbp - 48]
+    jmp .Lcpl_blk
+.Lcpl_next:
+    inc r13d
+    jmp .Lcpl_loop
+.Lcpl_done:
+    mov eax, r13d
+    EPILOGUE
+
+# tui_suppress_committed_cards(rdi=chat, rsi=TR_msgs VEC*, edx=committed): mark
+# every tool card referenced by an already-committed transcript message as
+# rendered.  A rebuild only draws messages from t_in_commit on, so a committed
+# message's card is otherwise "unmatched" and chat_render_unmatched would paint
+# it into the live region a second time.  Runs after chat_reset_marks so the
+# flag survives the rebuild.
+FN tui_suppress_committed_cards
+    PROLOGUE 16
+    mov r12, rdi                # chat
+    mov r13, rsi                # VEC* of Msg*
+    mov r14d, edx               # committed message count
+    test r14d, r14d
+    jz .Ltsc_done
+    cmp r14d, [r13 + VEC_len]
+    jbe 1f
+    mov r14d, [r13 + VEC_len]
+1:  xor ebx, ebx
+.Ltsc_msg:
+    cmp ebx, r14d
+    jae .Ltsc_done
+    mov rax, [r13 + VEC_ptr]
+    mov rdi, [rax + rbx*8]      # Msg*
+    test rdi, rdi
+    jz .Ltsc_next
+    mov rax, [rdi + M_blocks]
+    test rax, rax
+    jz .Ltsc_next
+    mov r15, rax                # VEC* of Block
+    mov dword ptr [rbp - 48], 0
+.Ltsc_blk:
+    mov eax, [rbp - 48]
+    cmp rax, [r15 + VEC_len]
+    jae .Ltsc_next
+    mov rax, [r15 + VEC_ptr]
+    mov ecx, [rbp - 48]
+    imul rcx, rcx, B_SIZE
+    add rax, rcx
+    cmp dword ptr [rax + B_type], BT_TOOLCALL
+    jne .Ltsc_bnext
+    mov rdi, [rax + B_ptr]      # ToolCall*
+    test rdi, rdi
+    jz .Ltsc_bnext
+    mov rsi, [rdi + TC_id]
+    test rsi, rsi
+    jz .Ltsc_bnext
+    mov rdi, r12
+    call chat_find
+    test rax, rax
+    jz .Ltsc_bnext
+    mov dword ptr [rax + CD_rendered], 1
+.Ltsc_bnext:
+    inc dword ptr [rbp - 48]
+    jmp .Ltsc_blk
+.Ltsc_next:
+    inc ebx
+    jmp .Ltsc_msg
+.Ltsc_done:
+    EPILOGUE
+
 # tui_draw_region(): compose and paint the owned inline region.
 FN tui_draw_region
     PROLOGUE 64
-    # ---- commit the finished transcript prefix when idle -----------------
-    call agent_busy
-    test eax, eax
-    jnz .Lrg_layout
-    call tui_render_all
+    # ---- commit the finished transcript prefix (busy or idle) ------------
+    # Every transcript message is finished by construction: the live, still
+    # changing content is a_msg plus any unmatched/running card, and both are
+    # rendered after t_in_live_base.  So the prefix can flow to real scrollback
+    # on every frame instead of waiting for the run to end.  t_in_offset counts
+    # the view rows already printed; the region
+    # draws only [t_in_offset, view_total), so a commit that cannot rebuild the
+    # view mid-stream still leaves just the live tail on screen.
     call agent_transcript
     mov r12, [rax + TR_msgs]
     mov eax, [rip + t_in_commit]
     cmp eax, [r12 + VEC_len]
     jbe .Lrg_cmp
     mov dword ptr [rip + t_in_commit], 0
+    mov dword ptr [rip + t_in_offset], 0
+    mov dword ptr [rip + t_in_base_len], 0
     xor eax, eax
 .Lrg_cmp:
-    cmp eax, [r12 + VEC_len]
-    jae .Lrg_layout
+    # C = the largest finished prefix.  A message with a still-running tool card
+    # is live and must not be printed yet (the old idle guard implicitly waited
+    # for it); everything before C is a finished whole message.
+    mov rdi, r12
+    mov esi, eax
+    call tui_commit_prefix_len
+    mov r13d, eax
+    cmp eax, [rip + t_in_commit]
+    jbe .Lrg_layout                # nothing new finished
+    # The view prefix must cover C before it is printed.  A rebuild resets the
+    # live markdown scratch, so while a text block streams the new prefix is
+    # deferred; the common case (C unchanged since the last rebuild) commits
+    # straight from the view, mid-run.
+    mov ecx, [rip + t_in_base_len]
+    cmp ecx, r13d
+    jae .Lrg_cancommit
+    cmp dword ptr [rip + t_md_live_on], 0
+    jne .Lrg_layout
+    call tui_render_all
+.Lrg_cancommit:
+    mov eax, [rip + t_in_live_base]
+    cmp eax, [rip + t_in_offset]
+    jbe .Lrg_layout
     call inline_emit_committed
-    mov eax, [r12 + VEC_len]
-    mov [rip + t_in_commit], eax
-    # The committed messages' cards are now in scrollback; drop them so the
-    # unmatched-card pass does not paint them into the region a second time.
+    mov eax, [rip + t_in_live_base]
+    mov [rip + t_in_offset], eax
+    mov [rip + t_in_commit], r13d
+    # Idle: nothing is live, so the committed cards can be dropped outright,
+    # which bounds the card vector over a long session.  While busy they stay
+    # and tui_render_all's committed-card pass keeps them out of the region.
+    call agent_busy
+    test eax, eax
+    jnz .Lrg_layout
     lea rdi, [rip + t_chat]
     call chat_clear
-    call tui_render_all
 .Lrg_layout:
     call tui_menu_sync
     # q = queue strip rows
@@ -1832,9 +1982,15 @@ FN tui_draw_region
     xor ecx, ecx
 .Lrg_b1:
     mov [rbp + RG_bud], ecx
-    # chat = min(budget, view_total): the region is only as tall as the tail
+    # chat = min(budget, view_total - t_in_offset): the region is only as tall
+    # as the uncommitted live tail; printed rows at the view top are skipped.
     lea rdi, [rip + t_view]
     call view_total
+    mov ecx, [rip + t_in_offset]
+    sub rax, rcx
+    jns .Lrg_lo
+    xor eax, eax
+.Lrg_lo:
     mov [rbp + RG_tot], rax
     mov eax, [rbp + RG_bud]
     cmp rax, [rbp + RG_tot]
@@ -1861,6 +2017,14 @@ FN tui_draw_region
     mov dword ptr [rip + t_cards_dirty], 0
 .Lrg_norb:
     call tui_stick_bottom
+    # Never draw a row that was already committed to scrollback.  The bottom
+    # anchor is normally above t_in_offset; this only matters if a scroll
+    # reached past the committed boundary.
+    mov eax, [rip + t_in_offset]
+    cmp [rip + t_view + VV_top], eax
+    jae .Lrg_offok
+    mov [rip + t_view + VV_top], eax
+.Lrg_offok:
     lea rdi, [rip + t_grid]
     xor esi, esi
     xor edx, edx
@@ -1870,19 +2034,9 @@ FN tui_draw_region
     xor edx, edx
     xor ecx, ecx
     call view_draw
-    cmp dword ptr [rbp + RG_mh], 0
-    jle .Lrg_nomenu
-    lea rdi, [rip + t_grid]
-    xor esi, esi
-    mov edx, [rbp + RG_chat]
-    mov ecx, [rip + t_w]
-    mov r8d, [rbp + RG_mh]
-    call menu_render
-.Lrg_nomenu:
     cmp dword ptr [rbp + RG_q], 0
     je .Lrg_noq
     mov edi, [rbp + RG_chat]
-    add edi, [rbp + RG_mh]
     call tui_queue_strip
 .Lrg_noq:
     call tui_placeholder
@@ -1894,7 +2048,6 @@ FN tui_draw_region
     lea rsi, [rip + t_grid]
     xor edx, edx
     mov ecx, [rbp + RG_chat]
-    add ecx, [rbp + RG_mh]
     add ecx, [rbp + RG_q]
     mov r8d, [rip + t_w]
     mov r9d, [rbp + RG_erows]
@@ -1907,6 +2060,19 @@ FN tui_draw_region
     add rsp, 32
     mov [rbp + RG_cx], eax
     mov [rbp + RG_cy], edx
+    # Inline: the command menu sits between the composer and the footer;
+    # fullscreen keeps it above.
+    cmp dword ptr [rbp + RG_mh], 0
+    jle .Lrg_nomenu
+    lea rdi, [rip + t_grid]
+    xor esi, esi
+    mov edx, [rbp + RG_chat]
+    add edx, [rbp + RG_q]
+    add edx, [rbp + RG_erows]
+    mov ecx, [rip + t_w]
+    mov r8d, [rbp + RG_mh]
+    call menu_render
+.Lrg_nomenu:
     mov eax, [rbp + RG_chat]
     add eax, [rbp + RG_q]
     add eax, [rbp + RG_erows]
@@ -2748,41 +2914,70 @@ tui_render_all:
     mov [rip + t_was_bottom], ecx
     lea rdi, [rip + t_view]
     call view_clear
+    mov dword ptr [rip + t_in_offset], 0
     lea rdi, [rip + t_chat]
     call chat_reset_marks
     call agent_transcript
     mov r12, [rax + TR_msgs]     # TR_msgs is a pointer to the VEC
     mov r13d, [rip + t_in_commit]
     cmp r13, [r12 + VEC_len]
-    jbe 1f
+    jbe .Ltra_from
     xor r13d, r13d
-1:  cmp r13, [r12 + VEC_len]
-    jae 2f
+.Ltra_from:
+    # C = the finished prefix end: whole messages with no running card.  Rows
+    # before it are the progressive inline commit boundary; [C, len) plus a_msg
+    # and any unmatched card is the live tail.
+    mov rdi, r12
+    mov esi, r13d
+    call tui_commit_prefix_len
+    mov [rbp - 48], eax
+.Ltra_prefix:
+    cmp r13d, [rbp - 48]
+    jae .Ltra_livebase
     mov rax, [r12 + VEC_ptr]
     mov rdi, [rax + r13*8]
     call tui_render_msg
     inc r13d
-    jmp 1b
-2:  # rows occupied by the transcript prefix [t_in_commit, len): the S7 inline
-    # commit boundary.  Everything rendered after this point is the live tail.
+    jmp .Ltra_prefix
+.Ltra_livebase:
+    # rows occupied by the finished prefix [t_in_commit, C): the S7 inline commit
+    # boundary.  Everything rendered after this point is the live tail.
     lea rdi, [rip + t_view]
     call view_total
     mov [rip + t_in_live_base], eax
+    mov ecx, [rbp - 48]
+    mov [rip + t_in_base_len], ecx
+.Ltra_live:
+    # live transcript messages [C, len) are shown but never committed
+    cmp r13d, [r12 + VEC_len]
+    jae .Ltra_current
+    mov rax, [r12 + VEC_ptr]
+    mov rdi, [rax + r13*8]
+    call tui_render_msg
+    inc r13d
+    jmp .Ltra_live
+.Ltra_current:
     call agent_current_msg
     test rax, rax
-    jz 3f
+    jz .Ltra_suppress
     # a just-finished message is already the transcript tail; do not render it
     # twice while a_msg has not yet been replaced by the next turn
     mov rcx, [r12 + VEC_len]
     test rcx, rcx
-    jz 4f
+    jz .Ltra_render_current
     dec rcx
     mov rdx, [r12 + VEC_ptr]
     cmp rax, [rdx + rcx*8]
-    je 3f
-4:  mov rdi, rax
+    je .Ltra_suppress
+.Ltra_render_current:
+    mov rdi, rax
     call tui_render_msg
-3:  call tui_now_ms
+.Ltra_suppress:
+    lea rdi, [rip + t_chat]
+    mov rsi, r12
+    mov edx, [rip + t_in_commit]
+    call tui_suppress_committed_cards
+    call tui_now_ms
     mov rcx, rax
     lea rdi, [rip + t_view]
     lea rsi, [rip + t_chat]
@@ -4153,6 +4348,13 @@ tui_script_key:
     mov rdi, r12
     call strlen
     mov rsi, rax
+    lea rdx, [rip + .Lk_altenter]
+    call str_eq_cstr
+    test eax, eax
+    jnz .Lsk_altenter
+    mov rdi, r12
+    call strlen
+    mov rsi, rax
     lea rdx, [rip + .Lk_up]
     call str_eq_cstr
     test eax, eax
@@ -4228,6 +4430,11 @@ tui_script_key:
     mov dword ptr [rip + t_scr + 0], K_ENTER
     mov dword ptr [rip + t_scr + 4], K_ENTER
     mov dword ptr [rip + t_scr + 8], 0
+    jmp .Lsk_dispatch
+.Lsk_altenter:
+    mov dword ptr [rip + t_scr + 0], K_ENTER
+    mov dword ptr [rip + t_scr + 4], K_ENTER
+    mov dword ptr [rip + t_scr + 8], 1      # mods alt -> the editor inserts a newline
     jmp .Lsk_dispatch
 .Lsk_up:
     mov dword ptr [rip + t_scr + 0], K_UP
@@ -4314,6 +4521,7 @@ tui_script_resize:
 
 .section .rodata
 .Lk_enter: .asciz "enter"
+.Lk_altenter: .asciz "alt-enter"
 .Lk_up:    .asciz "up"
 .Lk_down:  .asciz "down"
 .Lk_esc:   .asciz "esc"
