@@ -1,15 +1,14 @@
 # onboard.s: first-run provider onboarding for `opcode` (TUI) and `opcode -p`.
 #
-#   onboard_maybe() -> 0 proceed | 2 skip/no-tty (caller exits 2) | 130 ctrl-c
+#   onboard_maybe() -> 0 proceed | 2 skip/no-tty (caller exits 2)
 #
 # Trigger rule: never run when a provider+model is resolvable from --provider /
 # --model, config.jsonc (default_provider / default_model), env keys
 # (ANTHROPIC_API_KEY, OPENAI_API_KEY, OLLAMA_API_KEY), a stored credential
 # (auth.jsonc / OAuth store / config api_keys), a discovered cache, or a quick
-# local Ollama probe.  With a TTY it shows the provider menu on the normal
-# screen (raw mode is entered only while reading one key and restored before
-# anything is printed); without a TTY it prints the options and the caller
-# exits 2.
+# local Ollama probe.  With a TTY the provider and model choices are presented
+# through the modal picker (opcode_pick_tty); without a TTY it prints the
+# options and the caller exits 2.
 .include "opcode.inc"
 .include "core/core.inc"
 
@@ -18,6 +17,7 @@
 .extern discover_models, config_provider_at
 .extern config_save, config_str, auth_key, g_discover_base
 .extern g_agent_provider, g_agent_model
+.extern opcode_pick_tty
 
 .section .rodata
 .Lkey_dp:       .asciz "default_provider"
@@ -35,11 +35,29 @@
 .Lollama_local:  .asciz "http://127.0.0.1:11434"
 .Lslash:         .asciz "/"
 .Lnl:            .asciz "\n"
-.Lmenu:
-    .ascii "opcode: no provider is configured. Choose one:\n\n"
-    .ascii "1) Ollama (local)  2) Ollama Cloud  3) Anthropic  4) OpenAI  5) Google  6) Skip\n\n"
-    .ascii "  Ollama (local) needs no API key; cloud providers use 'opcode login <provider>'.\n\n"
-    .asciz "choice [1-6]: "
+.Lprovider_title: .asciz "Choose a provider"
+.Lmodel_title:    .asciz "Choose a model"
+.Lpn_ollama:      .asciz "Ollama local"
+.Lpn_cloud:       .asciz "Ollama Cloud"
+.Lpn_anthropic:   .asciz "Anthropic"
+.Lpn_openai:      .asciz "OpenAI"
+.Lpn_google:      .asciz "Google"
+.Lpn_skip:        .asciz "Skip for now"
+.Lpd_ollama:      .asciz "no API key; http://127.0.0.1:11434"
+.Lpd_cloud:       .asciz "opcode login ollama-cloud"
+.Lpd_anthropic:   .asciz "opcode login anthropic (or --api-key / ANTHROPIC_API_KEY)"
+.Lpd_openai:      .asciz "opcode login openai (or --api-key / OPENAI_API_KEY)"
+.Lpd_google:      .asciz "set GEMINI_API_KEY (or --api-key)"
+.Lpd_skip:        .asciz "pass --provider/--model, or set a key and re-run"
+.Ldefault_mark:   .asciz "(default) "
+.Lctx_mark:       .asciz " ctx="
+.Lreason_mark:    .asciz " reasoning"
+.Limage_mark:     .asciz " image"
+.p2align 3
+.Lprov_names:
+    .quad .Lpn_ollama, .Lpn_cloud, .Lpn_anthropic, .Lpn_openai, .Lpn_google, .Lpn_skip
+.Lprov_descs:
+    .quad .Lpd_ollama, .Lpd_cloud, .Lpd_anthropic, .Lpd_openai, .Lpd_google, .Lpd_skip
 .Lno_tty:
     .ascii "opcode: no provider is configured.\n"
     .ascii "  Ollama (local): no API key needed (http://127.0.0.1:11434)\n"
@@ -430,14 +448,27 @@ onboard_notty:
     lea rsi, [rip + .Lno_tty]
     jmp onboard_out
 
-# onboard_apply(provider, need_auth) -> 0 proceed | 2 no model found.
-# Runs discovery, picks the first discovered (or builtin) model, saves the
-# choice with config_save and prints the login command for cloud providers.
+# onboard_apply(provider, need_auth) -> 0 proceed | 2 no model / cancelled.
+# Runs discovery, offers the provider's catalog + discovered models in the modal
+# picker, saves the choice with config_save and prints the login command for
+# cloud providers.  Esc cancels onboarding; no models keeps the old message.
 onboard_apply:
-    PROLOGUE 64
+    PROLOGUE 176
     mov rbx, rdi                    # provider
     mov r12d, esi                   # need_auth
     mov qword ptr [rsp], 0          # saved discover base
+    mov qword ptr [rsp + 8], 0      # names array
+    mov qword ptr [rsp + 16], 0     # descs array
+    mov qword ptr [rsp + 24], 0     # model pointer array
+    mov qword ptr [rsp + 32], 0     # nmatch
+    mov qword ptr [rsp + 40], 0     # initial index
+    mov qword ptr [rsp + 48], 0     # catalog count
+    mov qword ptr [rsp + 72], 0     # result
+    mov qword ptr [rsp + 104], 0    # default MD*
+    # row-building SB at [rsp + 80]
+    mov qword ptr [rsp + 80 + SB_ptr], 0
+    mov qword ptr [rsp + 80 + SB_len], 0
+    mov qword ptr [rsp + 80 + SB_cap], 0
     mov rax, [rip + g_discover_base]
     mov [rsp], rax
     test rax, rax
@@ -456,16 +487,168 @@ onboard_apply:
     mov rax, [rsp]
     mov [rip + g_discover_base], rax
     call catalog_load_user
-    mov rdi, rbx
-    call onboard_pick_model
+    # first pass: count the provider's models
+    call catalog_count
+    mov [rsp + 48], rax
+    xor r13d, r13d
+    xor r14d, r14d
+.Loa_count:
+    cmp r13, [rsp + 48]
+    jae .Loa_counted
+    mov rdi, r13
+    call catalog_at
     test rax, rax
+    jz .Loa_count_next
+    mov r15, rax
+    mov rdi, [r15 + MD_provider]
+    call strlen
+    mov rsi, rax
+    mov rdi, [r15 + MD_provider]
+    mov rdx, rbx
+    call str_eq_cstr
+    test eax, eax
+    jz .Loa_count_next
+    inc r14
+.Loa_count_next:
+    inc r13
+    jmp .Loa_count
+.Loa_counted:
+    test r14, r14
     jz .Loa_nomodel
-    mov r13, rax
+    mov [rsp + 32], r14
+    mov rdi, r14
+    shl rdi, 3
+    call mem_alloc
+    mov [rsp + 8], rax
+    mov rdi, [rsp + 32]
+    shl rdi, 3
+    call mem_alloc
+    mov [rsp + 16], rax
+    mov rdi, [rsp + 32]
+    shl rdi, 3
+    call mem_alloc
+    mov [rsp + 24], rax
+    # the catalog default is the initial selection
+    mov rdi, rbx
+    call catalog_default
+    mov [rsp + 104], rax
+    xor r13d, r13d
+    xor r14d, r14d
+.Loa_fill:
+    cmp r13, [rsp + 48]
+    jae .Loa_filled
+    mov rdi, r13
+    call catalog_at
+    test rax, rax
+    jz .Loa_fill_next
+    mov r15, rax
+    mov rdi, [r15 + MD_provider]
+    call strlen
+    mov rsi, rax
+    mov rdi, [r15 + MD_provider]
+    mov rdx, rbx
+    call str_eq_cstr
+    test eax, eax
+    jz .Loa_fill_next
+    mov rax, [rsp + 8]
+    mov rdx, [r15 + MD_id]
+    mov [rax + r14*8], rdx
+    mov rax, [rsp + 24]
+    mov [rax + r14*8], r15
+    cmp r15, [rsp + 104]
+    jne 1f
+    mov [rsp + 40], r14
+1:  lea rdi, [rsp + 80]
+    call sb_clear
+    cmp r15, [rsp + 104]
+    jne 2f
+    lea rdi, [rsp + 80]
+    lea rsi, [rip + .Ldefault_mark]
+    call sb_push_cstr
+2:  lea rdi, [rsp + 80]
+    mov rsi, [r15 + MD_provider]
+    call sb_push_cstr
+    mov eax, [r15 + MD_ctx_window]
+    test eax, eax
+    jz 3f
+    lea rdi, [rsp + 80]
+    lea rsi, [rip + .Lctx_mark]
+    call sb_push_cstr
+    lea rdi, [rsp + 80]
+    mov esi, [r15 + MD_ctx_window]
+    call sb_push_u64
+3:  test dword ptr [r15 + MD_flags], MDF_REASONING
+    jz 4f
+    lea rdi, [rsp + 80]
+    lea rsi, [rip + .Lreason_mark]
+    call sb_push_cstr
+4:  test dword ptr [r15 + MD_flags], MDF_IMAGE
+    jz 5f
+    lea rdi, [rsp + 80]
+    lea rsi, [rip + .Limage_mark]
+    call sb_push_cstr
+5:  mov rdi, [rsp + 80 + SB_len]
+    inc rdi
+    call mem_alloc
+    mov [rsp + 112], rax
+    mov rdi, rax
+    mov rsi, [rsp + 80 + SB_ptr]
+    mov rdx, [rsp + 80 + SB_len]
+    call memcpy
+    mov rcx, [rsp + 112]
+    mov rdx, [rsp + 80 + SB_len]
+    mov byte ptr [rcx + rdx], 0
+    mov rax, [rsp + 16]
+    mov [rax + r14*8], rcx
+    inc r14
+.Loa_fill_next:
+    inc r13
+    jmp .Loa_fill
+.Loa_filled:
+    # the picker stores at most 32 rows; keep the initial index in range
+    cmp qword ptr [rsp + 40], 32
+    jb 6f
+    mov qword ptr [rsp + 40], 0
+6:  lea rdi, [rip + .Lmodel_title]
+    mov rsi, [rsp + 8]
+    mov rdx, [rsp + 16]
+    mov rcx, r14
+    mov r8, [rsp + 40]
+    call opcode_pick_tty
+    mov r13, rax                    # selection
+    xor r15d, r15d                  # selected MD*
+    test r13, r13
+    js .Loa_free
+    cmp r13, r14
+    jae .Loa_free
+    mov rcx, [rsp + 24]
+    mov r15, [rcx + r13*8]
+.Loa_free:
+    xor r13d, r13d
+.Loa_free_desc:
+    cmp r13, r14
+    jae .Loa_free_arrays
+    mov rax, [rsp + 16]
+    mov rdi, [rax + r13*8]
+    call mem_free
+    inc r13
+    jmp .Loa_free_desc
+.Loa_free_arrays:
+    mov rdi, [rsp + 8]
+    call mem_free
+    mov rdi, [rsp + 16]
+    call mem_free
+    mov rdi, [rsp + 24]
+    call mem_free
+    lea rdi, [rsp + 80]
+    call sb_free
+    test r15, r15
+    jz .Loa_cancel
     mov [rip + g_agent_provider], rbx
-    mov rax, [r13 + MD_id]
+    mov rax, [r15 + MD_id]
     mov [rip + g_agent_model], rax
     mov rdi, rbx
-    mov rsi, [r13 + MD_id]
+    mov rsi, [r15 + MD_id]
     xor edx, edx
     call config_save
     mov edi, 1
@@ -478,7 +661,7 @@ onboard_apply:
     lea rsi, [rip + .Lslash]
     call onboard_out
     mov edi, 1
-    mov rsi, [r13 + MD_id]
+    mov rsi, [r15 + MD_id]
     call onboard_out
     mov edi, 1
     lea rsi, [rip + .Lnl]
@@ -503,6 +686,12 @@ onboard_apply:
     call onboard_out
 .Loa_ok:
     xor eax, eax
+    EPILOGUE
+.Loa_cancel:
+    mov edi, 1
+    lea rsi, [rip + .Lcancelled]
+    call onboard_out
+    mov eax, 2
     EPILOGUE
 .Loa_nomodel:
     mov edi, 2
@@ -532,51 +721,29 @@ strq_eq:
 3:  mov eax, 1
     ret
 
-# onboard_menu() -> 0 proceed | 2 skip or EOF | 130 ctrl-c
+# onboard_menu() -> 0 proceed | 2 skip (Esc or Skip for now)
 onboard_menu:
-    PROLOGUE 128
-    mov edi, 1
-    lea rsi, [rip + .Lmenu]
-    call onboard_out
-    lea rdi, [rsp]
-    call os_tty_raw
-    test rax, rax
-    js .Lom_skip
-.Lom_read:
-    xor edi, edi
-    lea rsi, [rsp + 80]
-    mov edx, 1
-    call os_read
-    cmp rax, -EINTR
-    je .Lom_read
-    test rax, rax
-    jle .Lom_eof
-    movzx r12d, byte ptr [rsp + 80]
-    cmp r12b, 3
-    je .Lom_ctrlc
-    cmp r12b, '1'
-    jb .Lom_read
-    cmp r12b, '6'
-    ja .Lom_read
-    lea rdi, [rsp]
-    call os_tty_restore
-    mov edi, 1
-    lea rsi, [rsp + 80]
-    mov edx, 1
-    call write_all
-    mov edi, 1
-    lea rsi, [rip + .Lnl]
-    call onboard_out
-    cmp r12b, '6'
-    je .Lom_skip
-    cmp r12b, '1'
+    PROLOGUE 0
+    lea rdi, [rip + .Lprovider_title]
+    lea rsi, [rip + .Lprov_names]
+    lea rdx, [rip + .Lprov_descs]
+    mov ecx, 6
+    xor r8d, r8d
+    call opcode_pick_tty
+    cmp rax, 0
     je .Lom_c1
-    cmp r12b, '2'
+    cmp rax, 1
     je .Lom_c2
-    cmp r12b, '3'
+    cmp rax, 2
     je .Lom_c3
-    cmp r12b, '4'
+    cmp rax, 3
     je .Lom_c4
+    cmp rax, 4
+    je .Lom_c5
+    # index 5 (Skip for now) or -1 (Esc) -> skip
+    mov eax, 2
+    EPILOGUE
+.Lom_c5:
     # 5) Google: API key, served over Google's OpenAI-compatible endpoint
     lea rdi, [rip + .Lp_google]
     mov esi, 2
@@ -602,24 +769,8 @@ onboard_menu:
     mov esi, 1
     call onboard_apply
     EPILOGUE
-.Lom_skip:
-    mov eax, 2
-    EPILOGUE
-.Lom_ctrlc:
-    lea rdi, [rsp]
-    call os_tty_restore
-    mov edi, 1
-    lea rsi, [rip + .Lcancelled]
-    call onboard_out
-    mov eax, 130
-    EPILOGUE
-.Lom_eof:
-    lea rdi, [rsp]
-    call os_tty_restore
-    mov eax, 2
-    EPILOGUE
 
-# onboard_maybe() -> 0 proceed | 2 stop (message already printed) | 130 ctrl-c
+# onboard_maybe() -> 0 proceed | 2 stop (message already printed)
 FN onboard_maybe
     PROLOGUE 0
     call onboard_resolve

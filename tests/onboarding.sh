@@ -143,7 +143,8 @@ def wait_raw(fd, timeout):
 def spawn(args, home):
     master, slave = pty.openpty()
     proc = subprocess.Popen([BIN] + args, stdin=slave, stdout=slave,
-                            stderr=slave, env=env_for(home), close_fds=True)
+                            stderr=slave, env=env_for(home), close_fds=True,
+                            preexec_fn=controlling_tty(slave))
     os.close(slave)
     return master, proc
 
@@ -191,7 +192,7 @@ def drain(master, timeout):
         buf += data
     return buf
 
-# --- menu choice 1: config_save merges into an existing config.jsonc ---------
+# --- provider picker choice 1, model picker default: config_save merges -------
 home = os.path.join(TMP, "pty-home")
 cfgdir = os.path.join(home, ".config", "opcode")
 os.makedirs(cfgdir)
@@ -202,9 +203,11 @@ with open(cfg, "w") as fh:
 os.chmod(cfg, 0o600)
 os.umask(0o022)
 master, proc = spawn(["-p", "hi"], home)
-out = read_until(master, b"choice [1-6]:", 15)
-say("pty-menu-shown", b"1) Ollama (local)" in out and b"5) Google" in out and b"6) Skip" in out)
-os.write(master, b"1")
+out = read_until(master, b"Choose a provider", 15)
+say("pty-menu-shown", b"Ollama local" in out and b"Google" in out and b"Skip for now" in out)
+os.write(master, b"\r")
+out += read_until(master, b"Choose a model", 30)
+os.write(master, b"\r")
 out += read_until(master, b"configured ollama/", 30)
 say("pty-menu-choice", b"configured ollama/" in out)
 kill(proc)
@@ -220,31 +223,35 @@ say("pty-config-keep", ('"session_dir":"%s"' % sess) in text and '"api_key":"k"'
 say("pty-config-mode", oct(os.stat(cfg).st_mode & 0o777) == "0o600",
     oct(os.stat(cfg).st_mode & 0o777))
 say("pty-config-atomic", not os.path.exists(cfg + ".tmp"))
-say("pty-menu-auth", b"needs no API key" in out)
+say("pty-menu-auth", b"no API key" in out)
 
-# --- menu choice 3 for a cloud provider prints the login command -------------
+# --- provider picker Anthropic for a cloud provider: login command ----------
 home3 = os.path.join(TMP, "pty-home3")
 os.makedirs(home3)
 master, proc = spawn(["-p", "hi"], home3)
-out = read_until(master, b"choice [1-6]:", 15)
-os.write(master, b"3")
-out += read_until(master, b"opcode login anthropic", 30)
+out = read_until(master, b"Choose a provider", 15)
+os.write(master, b"\x1b[B\x1b[B\r")     # down x2 -> Anthropic
+out += read_until(master, b"Choose a model", 30)
+os.write(master, b"\r")
+out += read_until(master, b"configured anthropic/", 30)
 say("pty-cloud-login", b"opcode login anthropic" in out)
 kill(proc)
 os.close(master)
 
-# --- menu choice 5 (Google) prints the API-key hint --------------------------
+# --- provider picker Google: the API-key hint --------------------------------
 home4 = os.path.join(TMP, "pty-home4")
 os.makedirs(home4)
 master, proc = spawn(["-p", "hi"], home4)
-out = read_until(master, b"choice [1-6]:", 15)
-os.write(master, b"5")
+out = read_until(master, b"Choose a provider", 15)
+os.write(master, b"\x1b[B\x1b[B\x1b[B\x1b[B\r")  # down x4 -> Google
+out += read_until(master, b"Choose a model", 30)
+os.write(master, b"\r")
 out += read_until(master, b"GEMINI_API_KEY", 30)
 say("pty-google-hint", b"GEMINI_API_KEY" in out)
 kill(proc)
 os.close(master)
 
-# --- Ctrl-C in the menu: exit 130, terminal settings restored ----------------
+# --- Esc in the provider picker: clean skip (exit 2), terminal restored -----
 home2 = os.path.join(TMP, "pty-home2")
 os.makedirs(home2)
 master, slave = pty.openpty()
@@ -252,9 +259,8 @@ before = termios.tcgetattr(slave)
 proc = subprocess.Popen([BIN], stdin=slave, stdout=slave, stderr=slave,
                         env=env_for(home2), close_fds=True,
                         preexec_fn=controlling_tty(slave))
-out = read_until(master, b"choice [1-6]:", 15)
-wait_raw(slave, 5)
-os.write(master, b"\x03")
+out = read_until(master, b"Choose a provider", 15)
+os.write(master, b"\x1b\x1b")
 try:
     rc = proc.wait(timeout=10)
 except subprocess.TimeoutExpired:
@@ -264,10 +270,10 @@ out += drain(master, 2)
 after = termios.tcgetattr(slave)
 os.close(slave)
 os.close(master)
-say("pty-ctrl-c-rc", rc == 130, "rc=%r" % rc)
-say("pty-ctrl-c-restore", (before[3] & LFLAGS) == (after[3] & LFLAGS),
+say("pty-esc-rc", rc == 2, "rc=%r" % rc)
+say("pty-esc-restore", (before[3] & LFLAGS) == (after[3] & LFLAGS),
     "before=%x after=%x" % (before[3] & LFLAGS, after[3] & LFLAGS))
-say("pty-ctrl-c-msg", b"onboarding cancelled" in out, out[-200:])
+say("pty-esc-msg", b"Choose a provider" in out, out[-200:])
 
 sys.exit(1 if fail else 0)
 PY
