@@ -31,6 +31,9 @@
 .equ AS_DONE,      7
 .equ AS_ERROR,     8
 
+# log_debug_* threshold value (src/base/log.s)
+.equ LOG_DEBUG, 2
+
 .section .rodata
 .Lm_post:      .asciz "POST"
 .Lct_json:     .asciz "application/json"
@@ -84,6 +87,21 @@
 .Lcustom_compaction: .asciz "compaction"
 .K_first_kept: .asciz "first_kept"
 .K_tokens_before: .asciz "tokens_before"
+# --verbose diagnostics (see agent_dbg_request / agent_dbg_tool_*).  Only
+# emitted while g_log_level >= LOG_DEBUG, which --verbose turns on in init.
+.Ldbg_req:      .asciz "opcode: > "
+.Ldbg_resp:     .asciz "opcode: < "
+.Ldbg_sp:       .asciz " "
+.Ldbg_http:     .asciz "http://"
+.Ldbg_https:    .asciz "https://"
+.Ldbg_lparen:   .asciz " ("
+.Ldbg_reqend:   .asciz " bytes)\n"
+.Ldbg_rxend:    .asciz " bytes received)\n"
+.Ldbg_tool:     .asciz "opcode: tool "
+.Ldbg_launch:   .asciz " launched pid="
+.Ldbg_launched: .asciz " launched\n"
+.Ldbg_kill:     .asciz " kill pid="
+.Ldbg_nl:       .asciz "\n"
 
 .bss
 .p2align 3
@@ -173,6 +191,8 @@ a_deadline:  .zero 8
 a_turn:      .zero 8
 a_jobs:      .zero VEC_SIZE
 a_pending:   .zero 4
+a_seq_batch: .zero 4
+a_rx_bytes:  .zero 8
 a_abort:     .zero 4
 a_te:        .zero TE_SIZE
 a_finish_ms: .zero 8
@@ -331,6 +351,8 @@ agent_kill_job:
     mov rbx, rdi
     cmp dword ptr [rbx + J_state], JS_RUNNING
     jne .Lkj_ret
+    mov rdi, rbx
+    call agent_dbg_tool_kill
     mov edi, [rbx + J_fd]
     call watch_remove
     mov rdi, [rbx + J_pid]
@@ -712,6 +734,7 @@ agent_recv_more:
     jmp .Lrm_fail
 .Lrm_data:
     mov rbx, rax
+    add [rip + a_rx_bytes], rbx
     lea rdi, [rip + a_resp]
     mov rsi, [rip + a_recbuf]
     mov rdx, rbx
@@ -815,11 +838,14 @@ agent_send_more:
 
 # agent_send_begin()
 agent_send_begin:
+    PROLOGUE
     mov qword ptr [rip + a_send_off], 0
     mov rax, [rip + a_req_sb + SB_len]
     mov [rip + a_send_len], rax
+    call agent_dbg_request
     mov dword ptr [rip + a_state], AS_SEND
-    jmp agent_send_more
+    call agent_send_more
+    EPILOGUE
 
 # agent_handshake()
 agent_handshake:
@@ -929,7 +955,7 @@ agent_job_read:
     call tool_done
 6:  dec dword ptr [rip + a_pending]
     jnz .Ljr_ret
-    call agent_tools_finished
+    call agent_launch_jobs
 .Ljr_ret:
     EPILOGUE
 
@@ -943,11 +969,190 @@ agent_now_ms:
     div rcx
     EPILOGUE
 
-# agent_start_tools()
+# ---- verbose diagnostics ----------------------------------------------------
+# agent_dbg_request(): "> POST <url> (<n> bytes)\n" for a live request.
+agent_dbg_request:
+    PROLOGUE
+    cmp qword ptr [rip + g_agent_verbose], 0
+    je .Ldbr_ret
+    lea rdi, [rip + .Ldbg_req]
+    call log_debug_cstr
+    lea rdi, [rip + .Lm_post]
+    call log_debug_cstr
+    lea rdi, [rip + .Ldbg_sp]
+    call log_debug_cstr
+    cmp dword ptr [rip + a_tls], 0
+    je 1f
+    lea rdi, [rip + .Ldbg_https]
+    jmp 2f
+1:  lea rdi, [rip + .Ldbg_http]
+2:  call log_debug_cstr
+    lea rdi, [rip + a_authority]
+    call log_debug_cstr
+    lea rdi, [rip + a_pathbuf]
+    call log_debug_cstr
+    lea rdi, [rip + .Ldbg_lparen]
+    call log_debug_cstr
+    mov rdi, [rip + a_send_len]
+    call log_debug_u64
+    lea rdi, [rip + .Ldbg_reqend]
+    call log_debug_cstr
+.Ldbr_ret:
+    EPILOGUE
+
+# agent_dbg_response(): "< <status> (<n> bytes received)\n" at turn end.
+agent_dbg_response:
+    PROLOGUE
+    cmp qword ptr [rip + g_agent_verbose], 0
+    je .Ldbs_ret
+    lea rdi, [rip + .Ldbg_resp]
+    call log_debug_cstr
+    mov edi, [rip + a_http_status]
+    call log_debug_u64
+    lea rdi, [rip + .Ldbg_lparen]
+    call log_debug_cstr
+    mov rdi, [rip + a_rx_bytes]
+    call log_debug_u64
+    lea rdi, [rip + .Ldbg_rxend]
+    call log_debug_cstr
+.Ldbs_ret:
+    EPILOGUE
+
+# agent_dbg_tool_launch(job*): "tool <name> launched[ pid=N]\n"
+agent_dbg_tool_launch:
+    PROLOGUE
+    cmp qword ptr [rip + g_agent_verbose], 0
+    je .Ldtl_ret
+    mov rbx, rdi
+    lea rdi, [rip + .Ldbg_tool]
+    call log_debug_cstr
+    mov rax, [rbx + J_tool]
+    test rax, rax
+    jz 1f
+    mov rdi, [rax + TL_name]
+    call log_debug_cstr
+1:  cmp dword ptr [rbx + J_state], JS_RUNNING
+    jne 2f
+    lea rdi, [rip + .Ldbg_launch]
+    call log_debug_cstr
+    mov rdi, [rbx + J_pid]
+    call log_debug_u64
+    lea rdi, [rip + .Ldbg_nl]
+    call log_debug_cstr
+    jmp .Ldtl_ret
+2:  lea rdi, [rip + .Ldbg_launched]
+    call log_debug_cstr
+.Ldtl_ret:
+    EPILOGUE
+
+# agent_dbg_tool_kill(job*): "tool <name> kill pid=N\n"
+agent_dbg_tool_kill:
+    PROLOGUE
+    cmp qword ptr [rip + g_agent_verbose], 0
+    je .Ldtk_ret
+    mov rbx, rdi
+    lea rdi, [rip + .Ldbg_tool]
+    call log_debug_cstr
+    mov rax, [rbx + J_tool]
+    test rax, rax
+    jz 1f
+    mov rdi, [rax + TL_name]
+    call log_debug_cstr
+1:  lea rdi, [rip + .Ldbg_kill]
+    call log_debug_cstr
+    mov rdi, [rbx + J_pid]
+    call log_debug_u64
+    lea rdi, [rip + .Ldbg_nl]
+    call log_debug_cstr
+.Ldtk_ret:
+    EPILOGUE
+
+# agent_launch_job(job*): start one JS_NEW job.  Mirrors the former inline
+# launch tail: TL_exec, then either the read watch for a running child, or a
+# bounded launch-error record.  Called only by agent_launch_jobs.
+agent_launch_job:
+    PROLOGUE
+    mov rbx, rdi
+    mov rdi, rbx
+    mov rax, [rbx + J_tool]
+    call [rax + TL_exec]
+    mov r12d, eax                    # preserve the TL_exec result
+    mov rdi, rbx
+    call agent_dbg_tool_launch
+    test r12d, r12d
+    js .Llj_execerr
+    cmp dword ptr [rbx + J_state], JS_DONE
+    je .Llj_ret
+    mov edi, [rbx + J_fd]
+    mov esi, POLLIN
+    lea rdx, [rip + agent_job_read]
+    mov rcx, rbx
+    call watch_add
+    test eax, eax
+    js .Llj_watcherr
+    inc dword ptr [rip + a_pending]
+.Llj_ret:
+    EPILOGUE
+.Llj_execerr:
+    mov rdi, rbx
+    lea rsi, [rip + .Lbad_exec]
+    call job_error_text
+    mov rdi, rbx
+    call tool_done
+    EPILOGUE
+.Llj_watcherr:
+    mov rdi, rbx
+    lea rsi, [rip + .Lbad_watch]
+    call job_error_text
+    # watch_add failed *after* the child launched (JS_RUNNING): route through
+    # the kill/reap/close path, not tool_done, or the child is orphaned and its
+    # read fd leaks.  agent_kill_job is a no-op on a synchronously finished job.
+    mov rdi, rbx
+    call agent_kill_job
+    EPILOGUE
+
+# agent_launch_jobs(): the batch driver.  A concurrent batch starts every
+# JS_NEW job; a batch that contains any TL_SEQUENTIAL tool starts exactly one
+# and waits for it before the next.  Emits the tool_result messages (source
+# order) once nothing is runnable.
+agent_launch_jobs:
+    PROLOGUE
+.Llj_loop:
+    xor r12d, r12d
+    mov r13, [rip + a_jobs + VEC_ptr]
+.Llj_scan:
+    cmp r12, [rip + a_jobs + VEC_len]
+    jae .Llj_none
+    mov rbx, [r13 + r12*8]
+    cmp dword ptr [rbx + J_state], JS_NEW
+    je .Llj_start
+    inc r12
+    jmp .Llj_scan
+.Llj_none:
+    cmp dword ptr [rip + a_pending], 0
+    jne .Llj_hold
+    call agent_tools_finished
+    EPILOGUE
+.Llj_hold:
+    mov dword ptr [rip + a_state], AS_TOOLS
+    EPILOGUE
+.Llj_start:
+    mov rdi, rbx
+    call agent_launch_job
+    cmp dword ptr [rip + a_seq_batch], 0
+    je .Llj_loop
+    # sequential: stop as soon as the started job is running
+    cmp dword ptr [rbx + J_state], JS_RUNNING
+    je .Llj_hold
+    jmp .Llj_loop
+
+# agent_start_tools(): build one job per tool_call in source order, then hand
+# the batch to agent_launch_jobs.  Validation errors complete synchronously.
 agent_start_tools:
     PROLOGUE
     mov qword ptr [rip + a_jobs + VEC_len], 0
     mov dword ptr [rip + a_pending], 0
+    mov dword ptr [rip + a_seq_batch], 0
     xor r12d, r12d
 .Lst_loop:
     mov rdi, [rip + a_msg]
@@ -982,44 +1187,16 @@ agent_start_tools:
     mov rdi, rbx
     call tool_done
     jmp .Lst_push
-1:  mov rdi, [r13 + TC_name]
+1:  test dword ptr [r14 + TL_flags], TL_SEQUENTIAL
+    jz 11f
+    mov dword ptr [rip + a_seq_batch], 1
+11: mov rdi, [r13 + TC_name]
     mov rsi, [r13 + TC_args]
     call tool_validate
     test eax, eax
-    jz 2f
+    jz .Lst_push
     mov rdi, rbx
     lea rsi, [rip + .Lbad_args]
-    call job_error_text
-    mov rdi, rbx
-    call tool_done
-    jmp .Lst_push
-2:  mov rdi, rbx
-    mov rax, [rbx + J_tool]
-    call [rax + TL_exec]
-    test eax, eax
-    js 3f
-    cmp dword ptr [rbx + J_state], JS_DONE
-    je .Lst_push
-    mov edi, [rbx + J_fd]
-    mov esi, POLLIN
-    lea rdx, [rip + agent_job_read]
-    mov rcx, rbx
-    call watch_add
-    test eax, eax
-    js 4f
-    inc dword ptr [rip + a_pending]
-    jmp .Lst_push
-4:  mov rdi, rbx
-    lea rsi, [rip + .Lbad_watch]
-    call job_error_text
-    # watch_add failed *after* the child launched (JS_RUNNING): route through
-    # the kill/reap/close path, not tool_done, or the child is orphaned and its
-    # read fd leaks.  agent_kill_job is a no-op on a synchronously finished job.
-    mov rdi, rbx
-    call agent_kill_job
-    jmp .Lst_push
-3:  mov rdi, rbx
-    lea rsi, [rip + .Lbad_exec]
     call job_error_text
     mov rdi, rbx
     call tool_done
@@ -1031,11 +1208,7 @@ agent_start_tools:
     inc r12d
     jmp .Lst_loop
 .Lst_done:
-    cmp dword ptr [rip + a_pending], 0
-    jne 1f
-    call agent_tools_finished
-    EPILOGUE
-1:  mov dword ptr [rip + a_state], AS_TOOLS
+    call agent_launch_jobs
     EPILOGUE
 
 # agent_tools_finished(): append tool_result messages in order, next turn
@@ -1213,6 +1386,8 @@ agent_check_jobs:
     jb 3f
     or dword ptr [rbx + J_flags], JF_TIMEOUT
     mov qword ptr [rbx + J_deadline_ms], 0
+    mov rdi, rbx
+    call agent_dbg_tool_kill
     mov rdi, [rbx + J_pid]
     mov esi, 9                  # SIGKILL
     call os_kill_group
@@ -1997,6 +2172,7 @@ ag_compact_do:
 # agent_finish_turn(): close transport, decide tools vs next turn vs done
 agent_finish_turn:
     PROLOGUE
+    call agent_dbg_response
     cmp qword ptr [rip + a_fd], 0
     jl 1f
     mov edi, [rip + a_fd]
@@ -2043,6 +2219,7 @@ agent_start_turn:
     inc qword ptr [rip + a_turn]
     mov dword ptr [rip + a_done], 0
     mov dword ptr [rip + a_exit], 0
+    mov qword ptr [rip + a_rx_bytes], 0
     mov edi, CLOCK_MONOTONIC
     call os_now_ns
     mov rdx, TURN_TIMEOUT_MS
@@ -2119,7 +2296,11 @@ agent_start_turn:
 # agent_run(prompt cstr) -> exit code
 FN agent_init
     PROLOGUE
-    lea rax, [rip + agent_sink]
+    cmp qword ptr [rip + g_agent_verbose], 0
+    je 0f
+    mov edi, LOG_DEBUG
+    call log_set_level
+0:  lea rax, [rip + agent_sink]
     mov [rip + a_sink + SS_fn], rax
     mov qword ptr [rip + a_sink + SS_ctx], 0
     mov edi, RECV_CHUNK
