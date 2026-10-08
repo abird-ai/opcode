@@ -157,7 +157,7 @@ else
     diff -u build/tui-banner-exp.txt build/tui-banner-got.txt | head -40 || true
     fail=1
 fi
-nban=$(grep -a -c 'opcode 0.1.0-dev' build/tui-banner.bin || true)
+nban=$(grep -a -c "opcode $(cat VERSION)" build/tui-banner.bin || true)
 if [ "$nban" -eq 1 ] && grep -aq '?7l' build/tui-banner.bin && grep -aq '?7h' build/tui-banner.bin; then
     echo "ok   tui-banner-once"
 else
