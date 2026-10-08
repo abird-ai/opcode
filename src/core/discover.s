@@ -20,7 +20,12 @@
 #                           when a key exists), falling back to the native
 #                           <scheme://host[:port]>/api/tags
 #   api == openai-chat    : <base>/models                    (Bearer)
-#   api == anthropic-*    : <base>/v1/models                 (x-api-key)
+#   api == anthropic-*    : <base>/v1/models?limit=1000      (x-api-key)
+#   api == openai-responses, or provider == openai with a stored OAuth
+#   credential (agentc's openai_choice), : the Codex /models probe
+#                           <base>/models?client_version=<v>  (Bearer)
+#                           where <v> is config openai_client_version or
+#                           the built-in 1.0.0; the backend gates the set.
 #
 # The transport mirrors src/app/fetch.s: non-blocking connect, poll loop, TLS
 # handshake driven by tls_want, 8 s deadline, body capped at 4 MiB.
@@ -37,6 +42,7 @@
 .equ DK_OLLAMA,    1
 .equ DK_OPENAI,    2
 .equ DK_ANTHROPIC, 3
+.equ DK_RESPONSES, 4
 
 .ifndef E2BIG
 .equ E2BIG, 7
@@ -67,7 +73,10 @@ d_out:         .zero SB_SIZE
 d_authbuf:     .zero 512
 d_recbuf:      .zero DISC_RECV_BUF
 d_idkey:       .zero 8
+d_idkey2:      .zero 8        # id fallback key 2 (see disc_parse)
+d_idkey3:      .zero 8        # id fallback key 3 (see disc_parse)
 d_namekey:     .zero 8
+d_verbuf:      .zero 64       # Codex client_version scratch
 d_cur_id:      .zero 8
 d_cur_idlen:   .zero 8
 d_cur_name:    .zero 8
@@ -87,7 +96,8 @@ d_cache_count:    .zero 8        # cached model count for that entry
 .section .rodata
 .Ld_tags:        .asciz "/api/tags"
 .Ld_models:      .asciz "/models"
-.Ld_v1models:    .asciz "/v1/models"
+.Ld_v1models:    .asciz "/v1/models?limit=1000"
+.Ld_codex_models:.asciz "/models?client_version="
 .Lh_ua:          .asciz "user-agent"
 .Lua:            .asciz "opcode/0.1"
 .Lh_accept:      .asciz "accept"
@@ -102,10 +112,15 @@ d_cache_count:    .zero 8        # cached model count for that entry
 .Lprov_cloud:    .asciz "ollama-cloud"
 .Lapi_anthropic: .asciz "anthropic-messages"
 .Lapi_openai:    .asciz "openai-chat"
+.Lapi_responses: .asciz "openai-responses"
+.Lprov_openai:   .asciz "openai"
 .Lk_models:      .asciz "models"
 .Lk_data:        .asciz "data"
 .Lk_name:        .asciz "name"
 .Lk_id:          .asciz "id"
+.Lk_model:       .asciz "model"
+.Lk_slug:        .asciz "slug"
+.Lk_supported:   .asciz "supported_in_api"
 .Lk_display:     .asciz "display_name"
 .Lk_provider:    .asciz "provider"
 .Lk_api:         .asciz "api"
@@ -116,6 +131,7 @@ d_cache_count:    .zero 8        # cached model count for that entry
 .Lk_image:       .asciz "image"
 .Lk_no_key:      .asciz "no_key"
 .Lk_at:          .asciz "discovered_at"
+.Ldef_cv:        .asciz "1.0.0"
 .Lumodels:       .asciz "/models.jsonc"
 .Lumodelscache:  .asciz "/models-cache.jsonc"
 .Lk_fetched:     .asciz "fetched"
@@ -605,6 +621,26 @@ disc_write:
 4:  mov eax, 1
     EPILOGUE
 
+# .Ldp_get_str(el rdi, key rsi|0) -> rax ptr, rdx len; zero when the key is
+# absent, not a string, or empty.
+.Ldp_get_str:
+    PROLOGUE 0
+    test rsi, rsi
+    jz 1f
+    call json_get
+    test rax, rax
+    jz 1f
+    mov rdi, rax
+    call json_str
+    test rax, rax
+    jz 1f
+    test rdx, rdx
+    jz 1f
+    EPILOGUE
+1:  xor eax, eax
+    xor edx, edx
+    EPILOGUE
+
 # disc_parse() -> discovered count | -errno: parse d_body, merge with the
 # built-in catalog and write models.jsonc.
 disc_parse:
@@ -621,11 +657,27 @@ disc_parse:
     mov rbx, rax
     mov rdi, rbx
     cmp dword ptr [rip + d_parse_kind], DK_OLLAMA
-    jne 1f
+    je .Ldp_arr_models
+    cmp dword ptr [rip + d_parse_kind], DK_RESPONSES
+    je .Ldp_arr_models
+    # openai-chat/anthropic: "data" first, then "models"
+    lea rsi, [rip + .Lk_data]
+    call json_get
+    test rax, rax
+    jnz .Ldp_arr_got
+    mov rdi, rbx
     lea rsi, [rip + .Lk_models]
-    jmp 2f
-1:  lea rsi, [rip + .Lk_data]
-2:  call json_get
+    call json_get
+    jmp .Ldp_arr_got
+.Ldp_arr_models:
+    lea rsi, [rip + .Lk_models]
+    call json_get
+    test rax, rax
+    jnz .Ldp_arr_got
+    mov rdi, rbx
+    lea rsi, [rip + .Lk_data]
+    call json_get
+.Ldp_arr_got:
     test rax, rax
     jz .Ldp_bad
     mov [rsp], rax              # discovered array
@@ -706,17 +758,32 @@ disc_parse:
     test rax, rax
     jz .Ldp_dnext
     mov r14, rax
+    # skip an entry the backend marks not API-supported (Codex)
     mov rdi, r14
-    mov rsi, [rip + d_idkey]
+    lea rsi, [rip + .Lk_supported]
     call json_get
     test rax, rax
-    jz .Ldp_dnext
-    mov rdi, rax
-    call json_str
+    jz .Ldp_supp_ok
+    cmp dword ptr [rax + JV_type], JT_FALSE
+    je .Ldp_dnext
+.Ldp_supp_ok:
+    # id: idkey, then idkey2, then idkey3 (provider-specific fallbacks)
+    mov rdi, r14
+    mov rsi, [rip + d_idkey]
+    call .Ldp_get_str
+    test rax, rax
+    jnz .Ldp_did
+    mov rdi, r14
+    mov rsi, [rip + d_idkey2]
+    call .Ldp_get_str
+    test rax, rax
+    jnz .Ldp_did
+    mov rdi, r14
+    mov rsi, [rip + d_idkey3]
+    call .Ldp_get_str
     test rax, rax
     jz .Ldp_dnext
-    test rdx, rdx
-    jz .Ldp_dnext
+.Ldp_did:
     mov [rsp + 16], rax
     mov [rsp + 24], rdx
     mov [rip + d_scan_id], rax
@@ -733,17 +800,10 @@ disc_parse:
     # name: namekey | id
     mov rdi, r14
     mov rsi, [rip + d_namekey]
-    call json_get
+    call .Ldp_get_str
     test rax, rax
-    jz 5f
-    mov rdi, rax
-    call json_str
-    test rax, rax
-    jz 5f
-    test rdx, rdx
-    jz 5f
-    jmp 6f
-5:  mov rax, [rsp + 16]
+    jnz 6f
+    mov rax, [rsp + 16]
     mov rdx, [rsp + 24]
 6:  mov [rip + d_cur_name], rax
     mov [rip + d_cur_namelen], rdx
@@ -862,6 +922,85 @@ disc_discover_ollama:
 .Ldo_ret:
     EPILOGUE
 
+# disc_client_version() -> rax length (>= 1).  Writes the Codex discovery
+# `client_version` into d_verbuf (NUL-terminated): the configured
+# `openai_client_version` or the built-in default.
+disc_client_version:
+    PROLOGUE 16
+    call config_openai_client_version
+    test rax, rax
+    jz .Ldcv_default
+    mov r12, rax
+    mov rdi, rax
+    call strlen
+    mov r13, rax
+    cmp r13, 63
+    jbe 1f
+    mov r13, 63
+1:  lea rdi, [rip + d_verbuf]
+    mov rsi, r12
+    mov rdx, r13
+    call memcpy
+    lea rdi, [rip + d_verbuf]
+    mov byte ptr [rdi + r13], 0
+    mov rdi, r12
+    call mem_free
+    test r13, r13
+    jz .Ldcv_default
+    mov rax, r13
+    EPILOGUE
+.Ldcv_default:
+    lea rdi, [rip + d_verbuf]
+    lea rsi, [rip + .Ldef_cv]
+    call disc_strcpy512
+    lea rdi, [rip + d_verbuf]
+    call strlen
+    EPILOGUE
+
+# disc_path_append(off rdi, src rsi): append a cstr to d_pathbuf at off and
+# publish the new length.  Stops at the 511-byte cap.
+disc_path_append:
+    lea r8, [rip + d_pathbuf]
+    xor ecx, ecx
+1:  cmp rdi, 511
+    jae 2f
+    mov al, [rsi + rcx]
+    test al, al
+    jz 2f
+    mov [r8 + rdi], al
+    inc rdi
+    inc rcx
+    jmp 1b
+2:  mov byte ptr [r8 + rdi], 0
+    mov [rip + d_pathlen], rdi
+    ret
+
+# disc_discover_responses() -> count | -errno: OpenAI Responses / Codex
+# discovery.  GET <base>/models?client_version=<v>; the backend returns the
+# models whose minimal_client_version is at most the declared version, so the
+# configured value (or the built-in default) gates the set.
+disc_discover_responses:
+    PROLOGUE 16
+    mov dword ptr [rip + d_parse_kind], DK_RESPONSES
+    lea rax, [rip + .Lk_slug]
+    mov [rip + d_idkey], rax
+    lea rax, [rip + .Lk_id]
+    mov [rip + d_idkey2], rax
+    lea rax, [rip + .Lk_name]
+    mov [rip + d_idkey3], rax
+    lea rax, [rip + .Lk_display]
+    mov [rip + d_namekey], rax
+    mov rdi, [rip + d_hc + HC_url + U_path]
+    mov esi, [rip + d_hc + HC_url + U_path_len]
+    lea rdx, [rip + .Ld_codex_models]
+    call disc_join_path
+    call disc_client_version
+    mov rdi, [rip + d_pathlen]
+    lea rsi, [rip + d_verbuf]
+    call disc_path_append
+    call disc_attempt
+    EPILOGUE
+
 # discover_models(provider cstr, verbose u32) -> discovered count | -errno
 FN discover_models
     PROLOGUE 64
@@ -873,6 +1012,8 @@ FN discover_models
     mov qword ptr [rip + d_effective], 0
     mov qword ptr [rip + d_canon], 0
     mov qword ptr [rip + d_api], 0
+    mov qword ptr [rip + d_idkey2], 0
+    mov qword ptr [rip + d_idkey3], 0
     lea rdi, [rip + d_hc]
     call hc_init
     mov dword ptr [rip + d_flags], 0
@@ -940,23 +1081,59 @@ FN discover_models
     call disc_streq
     test eax, eax
     jnz .Ldm_kind_anthropic
+    # openai: a stored OAuth credential selects the Responses/Codex wire
+    # (mirrors agentc's openai_choice): an explicit --api-key wins, then a
+    # valid OAuth token, then an expired-but-stored OAuth entry.
+    mov rdi, [rsp]
+    lea rsi, [rip + .Lprov_openai]
+    call disc_streq
+    test eax, eax
+    jz .Ldm_kind_resp_api
+    lea rdi, [rip + .Lprov_openai]
+    call auth_key
+    test rax, rax
+    jz 8f
+    mov rdi, rax
+    call mem_free
+8:  call auth_last_was_oauth
+    test eax, eax
+    jnz .Ldm_kind_responses
+    cmp qword ptr [rip + oauth_present], 0
+    jne .Ldm_kind_responses
+.Ldm_kind_resp_api:
+    mov rdi, [rip + d_api]
+    lea rsi, [rip + .Lapi_responses]
+    call disc_streq
+    test eax, eax
+    jnz .Ldm_kind_responses
     mov dword ptr [rip + d_kind], DK_OPENAI
     lea rax, [rip + .Lk_id]
     mov [rip + d_idkey], rax
+    lea rax, [rip + .Lk_name]
+    mov [rip + d_idkey2], rax
+    lea rax, [rip + .Lk_display]
     mov [rip + d_namekey], rax
     jmp .Ldm_kind_done
 .Ldm_kind_ollama:
     mov dword ptr [rip + d_kind], DK_OLLAMA
     lea rax, [rip + .Lk_name]
     mov [rip + d_idkey], rax
+    lea rax, [rip + .Lk_model]
+    mov [rip + d_idkey2], rax
+    lea rax, [rip + .Lk_name]
     mov [rip + d_namekey], rax
     jmp .Ldm_kind_done
 .Ldm_kind_anthropic:
     mov dword ptr [rip + d_kind], DK_ANTHROPIC
     lea rax, [rip + .Lk_id]
     mov [rip + d_idkey], rax
+    lea rax, [rip + .Lk_name]
+    mov [rip + d_idkey2], rax
     lea rax, [rip + .Lk_display]
     mov [rip + d_namekey], rax
+    jmp .Ldm_kind_done
+.Ldm_kind_responses:
+    mov dword ptr [rip + d_kind], DK_RESPONSES
 .Ldm_kind_done:
     lea rdi, [rip + d_hc]
     mov rsi, [rip + d_effective]
@@ -975,6 +1152,8 @@ FN discover_models
 .Ldm_path_api:
     mov eax, [rip + d_kind]
     mov [rip + d_parse_kind], eax
+    cmp dword ptr [rip + d_kind], DK_RESPONSES
+    je .Ldm_path_responses
     mov rdi, [rip + d_hc + HC_url + U_path]
     mov esi, [rip + d_hc + HC_url + U_path_len]
     cmp dword ptr [rip + d_kind], DK_ANTHROPIC
@@ -984,6 +1163,9 @@ FN discover_models
 2:  lea rdx, [rip + .Ld_models]
 3:  call disc_join_path
     call disc_attempt
+    jmp .Ldm_cleanup
+.Ldm_path_responses:
+    call disc_discover_responses
 .Ldm_cleanup:
     mov r12, rax
     lea rdi, [rip + d_resp]
