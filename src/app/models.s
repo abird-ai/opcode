@@ -1,15 +1,18 @@
-# models.s: `opcode models [--refresh] [--provider P]`.
-# Prints the available models as provider/id lines sorted by provider then id,
-# each tagged (builtin) for the generated catalogue or (discovered) for entries
-# loaded from the user/discovered cache.  --refresh runs discover_models() for
-# the requested provider or for each configured provider before listing.
+# models.s: `opcode models [--refresh] [--provider P]` and the top-level
+# `--list-models [FILTER]`.  Prints the available models as provider/id lines
+# sorted by provider then id, each tagged (builtin) for the generated catalogue
+# or (discovered) for entries loaded from the user/discovered cache.  --refresh
+# and --refresh-models force discovery (ignoring the 24 h cache); a plain
+# --list-models reuses a fresh cache and can be filtered by a substring of the
+# provider, id or name.
 .include "opcode.inc"
 .include "core/core.inc"
 
 .extern opcode_catalog, opcode_catalog_count
 .extern catalog_count, catalog_at, catalog_load_user
-.extern discover_models
+.extern discover_models, discover_models_cached
 .extern config_provider_at
+.extern g_offline, g_discover_base
 
 .equ ME_md,    0                # MD*
 .equ ME_flags, 8               # 0 builtin, 1 discovered
@@ -17,9 +20,14 @@
 
 .section .rodata
 .Lopt_refresh:  .asciz "--refresh"
+.Lopt_refreshm: .asciz "--refresh-models"
+.Lopt_offline:  .asciz "--offline"
 .Lopt_provider: .asciz "--provider"
+.Lopt_base:     .asciz "--base-url"
 .Lusage:
     .asciz "usage: opcode models [--refresh] [--provider P]\n"
+.Llist_usage:
+    .asciz "usage: opcode --list-models [--refresh-models] [--offline] [--provider P] [--base-url U] [FILTER]\n"
 .Lkey_dp:       .asciz "default_provider"
 .Ltag_builtin:  .asciz " (builtin)"
 .Ltag_disc:     .asciz " (discovered)"
@@ -237,7 +245,8 @@ models_discover_one:
     PROLOGUE 128
     mov rbx, rdi
     xor esi, esi
-    call discover_models
+    mov edx, 1                  # models --refresh always ignores the cache
+    call discover_models_cached
     test rax, rax
     js .Lmdo_err
     xor eax, eax
@@ -637,4 +646,328 @@ models_prov_free:
 .Lmpf_done:
     mov rdi, rbx
     call vec_free
+    EPILOGUE
+
+# ============================================================ --list-models
+# cstr_contains(hay cstr, needle cstr) -> 1|0
+cstr_contains:
+    PROLOGUE 16
+    mov rbx, rdi
+    mov r12, rsi
+    mov rdi, rsi
+    call strlen
+    mov r13, rax
+    mov rdi, rbx
+    call strlen
+    mov rdi, rbx
+    mov rsi, rax
+    mov rdx, r12
+    mov rcx, r13
+    call str_find
+    test rax, rax
+    js .Lcc_no
+    mov eax, 1
+    EPILOGUE
+.Lcc_no:
+    xor eax, eax
+    EPILOGUE
+
+# models_match(md rdi, provider rsi|0, sub rdx|0) -> 1|0
+models_match:
+    PROLOGUE 32
+    mov [rsp], rdi
+    mov [rsp + 8], rsi
+    mov [rsp + 16], rdx
+    test rsi, rsi
+    jz .Lmm_sub
+    mov rdi, [rdi + MD_provider]
+    mov rsi, [rsp + 8]
+    call strq_eq
+    test eax, eax
+    jz .Lmm_no
+.Lmm_sub:
+    cmp qword ptr [rsp + 16], 0
+    je .Lmm_yes
+    mov rbx, [rsp]
+    mov rdi, [rbx + MD_id]
+    mov rsi, [rsp + 16]
+    call cstr_contains
+    test eax, eax
+    jnz .Lmm_yes
+    mov rdi, [rbx + MD_name]
+    test rdi, rdi
+    jz .Lmm_no
+    mov rsi, [rsp + 16]
+    call cstr_contains
+    test eax, eax
+    jnz .Lmm_yes
+.Lmm_no:
+    xor eax, eax
+    EPILOGUE
+.Lmm_yes:
+    mov eax, 1
+    EPILOGUE
+
+# models_collect_sub(entries VEC*, sub cstr|0, provider cstr|0): builtins +
+# user/discovered, keeping provider==provider (when set) and sub matching the
+# id/name; deduplicated against the builtins.
+models_collect_sub:
+    PROLOGUE 64
+    mov [rsp], rdi
+    mov [rsp + 8], rsi
+    mov [rsp + 16], rdx
+    mov r13, [rip + opcode_catalog_count]
+    xor r14d, r14d
+.Lmcs_bloop:
+    cmp r14, r13
+    jae .Lmcs_user
+    imul rax, r14, MD_SIZE
+    lea r15, [rip + opcode_catalog]
+    add r15, rax
+    mov rdi, r15
+    mov rsi, [rsp + 16]
+    mov rdx, [rsp + 8]
+    call models_match
+    test eax, eax
+    jz .Lmcs_bnext
+    mov rdi, [rsp]
+    mov rsi, r15
+    xor edx, edx
+    call models_add
+.Lmcs_bnext:
+    inc r14
+    jmp .Lmcs_bloop
+.Lmcs_user:
+    call catalog_count
+    mov r13, rax
+    xor r14d, r14d
+.Lmcs_uloop:
+    cmp r14, r13
+    jae .Lmcs_done
+    mov rdi, r14
+    call catalog_at
+    test rax, rax
+    jz .Lmcs_unext
+    mov r15, rax
+    mov rdi, r15
+    call models_is_builtin
+    test eax, eax
+    jnz .Lmcs_unext
+    mov rdi, r15
+    mov rsi, [rsp + 16]
+    mov rdx, [rsp + 8]
+    call models_match
+    test eax, eax
+    jz .Lmcs_unext
+    mov rdi, [rsp]
+    mov rsi, r15
+    call models_in_vec
+    test eax, eax
+    jnz .Lmcs_unext
+    mov rdi, [rsp]
+    mov rsi, r15
+    mov edx, 1
+    call models_add
+.Lmcs_unext:
+    inc r14
+    jmp .Lmcs_uloop
+.Lmcs_done:
+    EPILOGUE
+
+# models_print_vec(entries VEC*): "provider/id (builtin|discovered)" on stdout
+models_print_vec:
+    PROLOGUE 48
+    mov [rsp], rdi
+    mov qword ptr [rsp + 8 + SB_ptr], 0
+    mov qword ptr [rsp + 8 + SB_len], 0
+    mov qword ptr [rsp + 8 + SB_cap], 0
+    mov r13, [rdi + VEC_len]
+    mov r14, [rdi + VEC_ptr]
+    xor r12d, r12d
+.Lmpv_loop:
+    cmp r12, r13
+    jae .Lmpv_end
+    mov rax, r12
+    shl rax, 4
+    lea r15, [r14 + rax]
+    mov rbx, [r15 + ME_md]
+    lea rdi, [rsp + 8]
+    mov rsi, [rbx + MD_provider]
+    call sb_push_cstr
+    lea rdi, [rsp + 8]
+    lea rsi, [rip + .Lslash]
+    call sb_push_cstr
+    lea rdi, [rsp + 8]
+    mov rsi, [rbx + MD_id]
+    call sb_push_cstr
+    lea rdi, [rsp + 8]
+    cmp qword ptr [r15 + ME_flags], 0
+    jne .Lmpv_disc
+    lea rsi, [rip + .Ltag_builtin]
+    jmp .Lmpv_note
+.Lmpv_disc:
+    lea rsi, [rip + .Ltag_disc]
+.Lmpv_note:
+    call sb_push_cstr
+    lea rdi, [rsp + 8]
+    lea rsi, [rip + .Lnl]
+    call sb_push_cstr
+    inc r12
+    jmp .Lmpv_loop
+.Lmpv_end:
+    cmp qword ptr [rsp + 8 + SB_len], 0
+    jne .Lmpv_emit
+    lea rdi, [rsp + 8]
+    lea rsi, [rip + .Lnone]
+    call sb_push_cstr
+.Lmpv_emit:
+    mov edi, 1
+    mov rsi, [rsp + 8 + SB_ptr]
+    mov rdx, [rsp + 8 + SB_len]
+    call write_all
+    lea rdi, [rsp + 8]
+    call sb_free
+    EPILOGUE
+
+# opcode_list_models_main(argc, argv) -> exit code
+# argv[0] is "--list-models".  Discovers the resolved or all configured
+# providers (cache first unless --refresh-models), loads the catalog and
+# prints it, optionally filtered, without starting the agent.
+FN opcode_list_models_main
+    PROLOGUE 128
+    mov r15, rdi
+    mov r14, rsi
+    mov qword ptr [rsp], 0          # entries VEC
+    mov qword ptr [rsp + 8], 0
+    mov qword ptr [rsp + 16], 0
+    mov qword ptr [rsp + 24], 0     # providers VEC
+    mov qword ptr [rsp + 32], 0
+    mov qword ptr [rsp + 40], 0
+    mov qword ptr [rsp + 48], 0     # filter
+    mov qword ptr [rsp + 56], 0     # provider
+    mov dword ptr [rsp + 64], 0     # refresh
+    mov r12, 0
+.Llm_loop:
+    inc r12
+    cmp r12, r15
+    jae .Llm_parsed
+    mov r13, [r14 + r12*8]
+    cmp byte ptr [r13], '-'
+    jne .Llm_filter
+    mov rdi, r13
+    lea rsi, [rip + .Lopt_offline]
+    call strq_eq
+    test eax, eax
+    jnz .Llm_offline
+    mov rdi, r13
+    lea rsi, [rip + .Lopt_refreshm]
+    call strq_eq
+    test eax, eax
+    jnz .Llm_refresh
+    mov rdi, r13
+    lea rsi, [rip + .Lopt_provider]
+    call strq_eq
+    test eax, eax
+    jnz .Llm_provider
+    mov rdi, r13
+    lea rsi, [rip + .Lopt_base]
+    call strq_eq
+    test eax, eax
+    jnz .Llm_base
+    jmp .Llm_usage
+.Llm_offline:
+    mov qword ptr [rip + g_offline], 1
+    jmp .Llm_next
+.Llm_refresh:
+    mov dword ptr [rsp + 64], 1
+    jmp .Llm_next
+.Llm_provider:
+    inc r12
+    cmp r12, r15
+    jae .Llm_usage
+    mov rax, [r14 + r12*8]
+    mov [rsp + 56], rax
+    jmp .Llm_next
+.Llm_base:
+    inc r12
+    cmp r12, r15
+    jae .Llm_usage
+    mov rax, [r14 + r12*8]
+    mov [rip + g_discover_base], rax
+    jmp .Llm_next
+.Llm_filter:
+    mov [rsp + 48], r13
+.Llm_next:
+    jmp .Llm_loop
+.Llm_parsed:
+    call config_load
+    mov rdi, [rsp + 56]
+    test rdi, rdi
+    jnz .Llm_add_prov
+    lea rdi, [rip + .Lkey_dp]
+    call config_str
+    test rax, rax
+    jz .Llm_scan
+    mov rbx, rax
+    lea rdi, [rsp + 24]
+    mov rsi, rbx
+    call models_prov_add
+    mov rdi, rbx
+    call mem_free
+.Llm_scan:
+    xor r12d, r12d
+.Llm_scan_loop:
+    mov edi, r12d
+    call config_provider_at
+    test rax, rax
+    jz .Llm_discover
+    mov rbx, rax
+    lea rdi, [rsp + 24]
+    mov rsi, rbx
+    call models_prov_add
+    mov rdi, rbx
+    call mem_free
+    inc r12d
+    jmp .Llm_scan_loop
+.Llm_add_prov:
+    mov rsi, [rsp + 56]
+    lea rdi, [rsp + 24]
+    call models_prov_add
+.Llm_discover:
+    mov r13, [rsp + 24 + VEC_len]
+    mov r14, [rsp + 24 + VEC_ptr]
+    xor r12d, r12d
+.Llm_disc_loop:
+    cmp r12, r13
+    jae .Llm_list
+    mov rdi, [r14 + r12*8]
+    xor esi, esi
+    mov edx, [rsp + 64]
+    call discover_models_cached
+    inc r12
+    jmp .Llm_disc_loop
+.Llm_list:
+    call catalog_load_user
+    lea rdi, [rsp]
+    mov rsi, [rsp + 48]
+    mov rdx, [rsp + 56]
+    call models_collect_sub
+    lea rdi, [rsp]
+    call models_sort
+    lea rdi, [rsp]
+    call models_print_vec
+    xor eax, eax
+    jmp .Llm_cleanup
+.Llm_usage:
+    mov edi, 2
+    lea rsi, [rip + .Llist_usage]
+    call out_cstr
+    mov eax, 2
+.Llm_cleanup:
+    mov [rsp + 72], eax
+    lea rdi, [rsp]
+    call vec_free
+    lea rdi, [rsp + 24]
+    call models_prov_free
+    mov eax, [rsp + 72]
     EPILOGUE

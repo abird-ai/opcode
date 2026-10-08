@@ -79,6 +79,10 @@ d_scan_arr:    .zero 8
 d_scan_upto:   .zero 8
 d_scan_id:     .zero 8
 d_scan_idlen:  .zero 8
+.globl g_discover_force
+g_discover_force: .zero 4        # --refresh-models: ignore a fresh cache
+d_cache_fetched:  .zero 8        # newest "fetched" seen by disc_cache_load
+d_cache_count:    .zero 8        # cached model count for that entry
 
 .section .rodata
 .Ld_tags:        .asciz "/api/tags"
@@ -113,6 +117,12 @@ d_scan_idlen:  .zero 8
 .Lk_no_key:      .asciz "no_key"
 .Lk_at:          .asciz "discovered_at"
 .Lumodels:       .asciz "/models.jsonc"
+.Lumodelscache:  .asciz "/models-cache.jsonc"
+.Lk_fetched:     .asciz "fetched"
+.Lk_count:       .asciz "count"
+
+# Discovered-model cache entries stay fresh for 24 h (DISC_TTL_MS).
+.equ DISC_TTL_MS, 86400000
 .Ltmp_suffix:    .asciz ".tmp"
 .Lempty:         .asciz ""
 .Ldiscovered:    .asciz "opcode: discovered "
@@ -1002,3 +1012,306 @@ FN discover_models
 .Ldm_nobase:
     mov rax, -ENOENT
     jmp .Ldm_cleanup
+
+# ============================================================ discovery cache
+#
+# A successful discovery records {provider, base, fetched, count} in
+# models-cache.jsonc so a later run can skip the network while the entry is
+# younger than DISC_TTL_MS.  The file is JSON Lines (one object per line);
+# disc_cache_load keeps the newest matching entry, so appending on save is safe
+# and a changed base URL invalidates the entry (a stale entry for another
+# endpoint must not surface models that may not exist there).  The loaded
+# catalog itself is still models.jsonc, written by discover_models.
+
+# disc_cache_path() -> mem_alloc'd <config dir>/models-cache.jsonc | 0
+FN disc_cache_path
+    PROLOGUE
+    call config_user_dir
+    test rax, rax
+    jz .Ldcp_none
+    mov rdi, rax
+    lea rsi, [rip + .Lumodelscache]
+    call config_path_join
+    EPILOGUE
+.Ldcp_none:
+    xor eax, eax
+    EPILOGUE
+
+# disc_cache_load(provider rdi, base rsi|0, fetched_out rdx|0) -> cached count
+# Sets d_cache_fetched/d_cache_count for the newest matching entry.
+FN disc_cache_load
+    PROLOGUE 96
+    mov [rsp], rdi              # provider
+    mov [rsp + 8], rsi          # base
+    mov [rsp + 16], rdx         # fetched_out
+    test rdx, rdx
+    jz 0f
+    mov qword ptr [rdx], 0
+0:  mov qword ptr [rip + d_cache_fetched], 0
+    mov qword ptr [rip + d_cache_count], 0
+    mov qword ptr [rsp + 88], 0
+    call disc_cache_path
+    test rax, rax
+    jz .Ldcl_zero
+    mov [rsp + 24], rax         # path
+    mov qword ptr [rsp + 32 + SB_ptr], 0
+    mov qword ptr [rsp + 32 + SB_len], 0
+    mov qword ptr [rsp + 32 + SB_cap], 0
+    mov rdi, rax
+    lea rsi, [rsp + 32]
+    call config_read_file
+    test eax, eax
+    jz .Ldcl_freepath
+    mov rdi, [rsp + 32 + SB_ptr]
+    mov [rsp + 64], rdi         # cursor
+    add rdi, [rsp + 32 + SB_len]
+    mov [rsp + 72], rdi         # end
+.Ldcl_line:
+    mov rax, [rsp + 64]
+    cmp rax, [rsp + 72]
+    jae .Ldcl_done
+    mov rcx, rax
+.Ldcl_findnl:
+    cmp rcx, [rsp + 72]
+    jae .Ldcl_have
+    cmp byte ptr [rcx], 10
+    je .Ldcl_have
+    inc rcx
+    jmp .Ldcl_findnl
+.Ldcl_have:
+    mov [rsp + 80], rcx         # line end
+    mov rdi, [rsp + 64]
+    mov rsi, rcx
+    sub rsi, rdi
+    test rsi, rsi
+    jz .Ldcl_next
+    call json_parse
+    test rax, rax
+    jz .Ldcl_next
+    mov rbx, rax
+    mov rdi, rbx
+    lea rsi, [rip + .Lk_provider]
+    call json_get_cstr
+    test rax, rax
+    jz .Ldcl_next
+    mov rdi, rax
+    mov rsi, [rsp]
+    call disc_streq
+    test eax, eax
+    jz .Ldcl_next
+    mov rax, [rsp + 8]
+    test rax, rax
+    jz .Ldcl_basedone
+    mov rdi, rbx
+    lea rsi, [rip + .Lk_base]
+    call json_get_cstr
+    test rax, rax
+    jz .Ldcl_basedone
+    cmp byte ptr [rax], 0
+    je .Ldcl_basedone
+    mov rdi, rax
+    mov rsi, [rsp + 8]
+    call disc_streq
+    test eax, eax
+    jz .Ldcl_next
+.Ldcl_basedone:
+    mov rdi, rbx
+    lea rsi, [rip + .Lk_fetched]
+    xor edx, edx
+    call json_get_u64
+    cmp rax, [rip + d_cache_fetched]
+    jbe .Ldcl_next
+    mov [rip + d_cache_fetched], rax
+    mov rdi, rbx
+    lea rsi, [rip + .Lk_count]
+    xor edx, edx
+    call json_get_u64
+    mov [rip + d_cache_count], rax
+.Ldcl_next:
+    mov rax, [rsp + 80]
+    cmp rax, [rsp + 72]
+    jae .Ldcl_setend
+    inc rax
+.Ldcl_setend:
+    mov [rsp + 64], rax
+    jmp .Ldcl_line
+.Ldcl_done:
+    mov rax, [rip + d_cache_count]
+    mov rdx, [rsp + 16]
+    test rdx, rdx
+    jz 1f
+    mov rcx, [rip + d_cache_fetched]
+    mov [rdx], rcx
+1:  mov [rsp + 88], rax
+    lea rdi, [rsp + 32]
+    call sb_free
+.Ldcl_freepath:
+    mov rdi, [rsp + 24]
+    call mem_free
+    mov rax, [rsp + 88]
+    EPILOGUE
+.Ldcl_zero:
+    xor eax, eax
+    EPILOGUE
+
+# disc_cache_save(provider rdi, base rsi|0, count rdx): append one JSONL entry.
+# Best effort: any failure is ignored (discovery must never become fatal).
+FN disc_cache_save
+    PROLOGUE 96
+    mov [rsp], rdi
+    mov [rsp + 8], rsi
+    mov [rsp + 16], rdx
+    call disc_cache_path
+    test rax, rax
+    jz .Ldcs_done
+    mov [rsp + 24], rax
+    mov qword ptr [rsp + 32 + SB_ptr], 0
+    mov qword ptr [rsp + 32 + SB_len], 0
+    mov qword ptr [rsp + 32 + SB_cap], 0
+    lea rdi, [rsp + 32]
+    call jsonw_obj
+    lea rdi, [rsp + 32]
+    lea rsi, [rip + .Lk_provider]
+    call jsonw_key
+    lea rdi, [rsp + 32]
+    mov rsi, [rsp]
+    call jsonw_str_cstr
+    lea rdi, [rsp + 32]
+    lea rsi, [rip + .Lk_base]
+    call jsonw_key
+    mov rsi, [rsp + 8]
+    test rsi, rsi
+    jnz 1f
+    lea rsi, [rip + .Lempty]
+1:  lea rdi, [rsp + 32]
+    call jsonw_str_cstr
+    lea rdi, [rsp + 32]
+    lea rsi, [rip + .Lk_fetched]
+    call jsonw_key
+    mov edi, CLOCK_REALTIME
+    call os_now_ns
+    xor edx, edx
+    mov ecx, 1000000
+    div rcx
+    mov rsi, rax
+    lea rdi, [rsp + 32]
+    call jsonw_u64
+    lea rdi, [rsp + 32]
+    lea rsi, [rip + .Lk_count]
+    call jsonw_key
+    mov rsi, [rsp + 16]
+    lea rdi, [rsp + 32]
+    call jsonw_u64
+    lea rdi, [rsp + 32]
+    call jsonw_obj_end
+    lea rdi, [rsp + 32]
+    mov esi, 10
+    call sb_push_byte
+    mov rdi, [rsp + 24]
+    mov esi, O_WRONLY | O_CREAT | O_APPEND
+    mov edx, 0600
+    call os_open
+    test rax, rax
+    js .Ldcs_free
+    mov [rsp + 80], rax
+    mov edi, eax
+    mov rsi, [rsp + 32 + SB_ptr]
+    mov rdx, [rsp + 32 + SB_len]
+    call write_all
+    mov edi, [rsp + 80]
+    call os_close
+.Ldcs_free:
+    lea rdi, [rsp + 32]
+    call sb_free
+    mov rdi, [rsp + 24]
+    call mem_free
+.Ldcs_done:
+    EPILOGUE
+
+# disc_eff_base(provider rdi) -> rax base | 0, rdx owned base to free | 0
+# Same precedence discover_models uses: g_discover_base > config base > catalog.
+FN disc_eff_base
+    PROLOGUE 16
+    mov r12, rdi
+    mov rax, [rip + g_discover_base]
+    test rax, rax
+    jnz .Ldeb_borrow
+    mov rdi, r12
+    call config_provider_base
+    test rax, rax
+    jz .Ldeb_cat
+    mov rdx, rax
+    EPILOGUE
+.Ldeb_cat:
+    mov rdi, r12
+    call catalog_default
+    test rax, rax
+    jz .Ldeb_none
+    mov rax, [rax + MD_base]
+    test rax, rax
+    jz .Ldeb_none
+    xor edx, edx
+    EPILOGUE
+.Ldeb_borrow:
+    xor edx, edx
+    EPILOGUE
+.Ldeb_none:
+    xor eax, eax
+    xor edx, edx
+    EPILOGUE
+
+# discover_models_cached(provider rdi, verbose esi, force edx) -> count | -errno
+# Reuses a fresh (< 24 h) cache unless forced; --offline never probes and a
+# probe failure falls back to the cached count, so the caller is never forced
+# to treat a miss as fatal.  discover_models itself still writes models.jsonc.
+FN discover_models_cached
+    PROLOGUE 64
+    mov [rsp], rdi
+    mov [rsp + 8], rsi
+    mov [rsp + 16], rdx
+    call disc_eff_base
+    mov [rsp + 24], rax         # base
+    mov [rsp + 32], rdx         # owned base
+    mov rdi, [rsp]
+    mov rsi, [rsp + 24]
+    lea rdx, [rsp + 40]
+    call disc_cache_load
+    mov [rsp + 48], rax         # cached count
+    cmp qword ptr [rsp + 16], 0
+    jne .Ldmc_offline          # forced: skip the fresh-cache return
+    test rax, rax
+    jle .Ldmc_offline
+    mov rcx, [rsp + 40]
+    test rcx, rcx
+    jz .Ldmc_offline
+    mov edi, CLOCK_REALTIME
+    call os_now_ns
+    xor edx, edx
+    mov ecx, 1000000
+    div rcx
+    sub rax, [rsp + 40]
+    cmp rax, DISC_TTL_MS
+    jb .Ldmc_cached
+.Ldmc_offline:
+    cmp qword ptr [rip + g_offline], 0
+    jne .Ldmc_cached
+    mov rdi, [rsp]
+    mov esi, [rsp + 8]
+    call discover_models
+    test rax, rax
+    js .Ldmc_cached
+    mov [rsp + 56], rax
+    mov rdi, [rsp]
+    mov rsi, [rsp + 24]
+    mov rdx, rax
+    call disc_cache_save
+    mov rax, [rsp + 56]
+    jmp .Ldmc_free
+.Ldmc_cached:
+    mov rax, [rsp + 48]
+.Ldmc_free:
+    mov [rsp + 56], rax
+    mov rdi, [rsp + 32]
+    call mem_free
+    mov rax, [rsp + 56]
+    EPILOGUE

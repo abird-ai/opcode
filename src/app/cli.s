@@ -45,7 +45,14 @@
 .equ CL_THINKING, 21
 .equ CL_THEME,    22
 .equ CL_CAPTURE,  23
-.equ CL_MAXACT,   23
+.equ CL_RESUME,   24
+.equ CL_REFRESHM, 25
+.equ CL_MAXACT,   25
+
+# The pre-TUI session picker is owned by the PICKERS seat (src/tui/pick.s).  A
+# weak reference keeps this build linkable before that file exists; absent, the
+# resume path falls back to the newest session.
+.weak opcode_pick_tty
 
 .section .rodata
 .Lspace:        .asciz " "
@@ -74,6 +81,7 @@
 .Lf_base:       .asciz "--base-url"
 .Lf_system:     .asciz "--system"
 .Lf_offline:    .asciz "--offline"
+.Lf_refreshm:   .asciz "--refresh-models"
 .Lf_replay:     .asciz "--replay"
 .Lf_maxtok:     .asciz "--max-tokens"
 .Lf_verbose:    .asciz "--verbose"
@@ -91,6 +99,9 @@
 .Lf_thinking:   .asciz "--thinking"
 .Lf_theme:      .asciz "--theme"
 .Lf_capture:    .asciz "--headless-capture"
+.Lpick_title:   .asciz "Resume a session"
+.Lkey_dp:       .asciz "default_provider"
+.Lprov_openai:  .asciz "openai"
 .Lf_p:          .asciz "-p"
 .Lf_print:      .asciz "--print"
 .Lv_scrollback: .asciz "scrollback"
@@ -106,11 +117,12 @@ cli_flags:
     .quad .Lf_base;      .long CK_AGENT; .long 1; .long CL_BASE;     .long 0
     .quad .Lf_system;    .long CK_AGENT; .long 1; .long CL_SYSTEM;   .long 0
     .quad .Lf_offline;   .long CK_AGENT; .long 0; .long CL_OFFLINE;  .long 0
+    .quad .Lf_refreshm;  .long CK_AGENT; .long 0; .long CL_REFRESHM; .long 0
     .quad .Lf_replay;    .long CK_AGENT; .long 1; .long CL_REPLAY;   .long 0
     .quad .Lf_maxtok;    .long CK_AGENT; .long 1; .long CL_MAXTOK;   .long 0
     .quad .Lf_verbose;   .long CK_AGENT; .long 0; .long CL_VERBOSE;  .long 0
     .quad .Lf_continue;  .long CK_AGENT; .long 0; .long CL_CONT;     .long 0
-    .quad .Lf_resume;    .long CK_AGENT; .long 0; .long CL_CONT;     .long 0
+    .quad .Lf_resume;    .long CK_AGENT; .long 0; .long CL_RESUME;   .long 0
     .quad .Lf_session;   .long CK_AGENT; .long 1; .long CL_SESSION;  .long 0
     .quad .Lf_sdir;      .long CK_AGENT; .long 1; .long CL_SDIR;     .long 0
     .quad .Lf_nosess;    .long CK_AGENT; .long 0; .long CL_NOSESS;   .long 0
@@ -153,6 +165,8 @@ cli_flags:
     .quad .Lca_thinking
     .quad .Lca_theme
     .quad .Lca_capture
+    .quad .Lca_resume
+    .quad .Lca_refreshm
 
 .bss
 .p2align 3
@@ -418,6 +432,14 @@ cli_apply:
     mov qword ptr [rip + g_tui_headless], 1
     xor eax, eax
     ret
+.Lca_refreshm:
+    mov dword ptr [rip + g_discover_force], 1
+    xor eax, eax
+    ret
+.Lca_resume:
+    mov dword ptr [rip + cl_mode], 4
+    xor eax, eax
+    ret
 
 # cli_parse(argc rdi, argv rsi, kind edx) -> 0 ok | 2 usage error (printed)
 FN cli_parse
@@ -590,7 +612,43 @@ FN cli_require_prompt
 
 # cli_open_session() -> 0 ok | 1 session not found (printed)
 FN cli_open_session
-    PROLOGUE
+    PROLOGUE 256
+    # --refresh-models: force discovery for the resolved provider before the
+    # session/agent setup, so a newly added model becomes selectable.  --offline
+    # still suppresses the probe (discover_models_cached honours it).
+    cmp dword ptr [rip + g_discover_force], 0
+    je .Lcs_mode
+    mov rdi, [rip + g_agent_provider]
+    test rdi, rdi
+    jnz .Lcs_rd_flag
+    lea rdi, [rip + .Lkey_dp]
+    call config_str
+    test rax, rax
+    jz .Lcs_rd_default
+    mov r12, rax
+    mov r13, 1                  # owned by config_str
+    jmp .Lcs_rd_disc
+.Lcs_rd_default:
+    lea r12, [rip + .Lprov_openai]
+    xor r13d, r13d
+    jmp .Lcs_rd_disc
+.Lcs_rd_flag:
+    mov r12, rdi
+    xor r13d, r13d
+.Lcs_rd_disc:
+    mov rax, [rip + g_agent_base]
+    test rax, rax
+    jz 1f
+    mov [rip + g_discover_base], rax
+1:  mov rdi, r12
+    xor esi, esi
+    mov edx, 1
+    call discover_models_cached
+    test r13, r13
+    jz .Lcs_mode
+    mov rdi, r12
+    call mem_free
+.Lcs_mode:
     mov eax, [rip + cl_mode]
     cmp eax, 3
     je .Lcs_ok
@@ -602,6 +660,8 @@ FN cli_open_session
     je .Lcs_id
     cmp eax, 1
     je .Lcs_cont
+    cmp eax, 4
+    je .Lcs_resume
     jmp .Lcs_new
 .Lcs_id:
     mov rdi, [rip + cl_session]
@@ -636,6 +696,95 @@ FN cli_open_session
     jz .Lcs_missing
     mov [rip + g_agent_session], rax
     jmp .Lcs_ok
+.Lcs_resume:
+    # --resume with no explicit --session: a terminal gets the pre-TUI picker
+    # over the cwd's sessions, newest first; a non-tty run keeps the newest.
+    cmp qword ptr [rip + cl_session], 0
+    jne .Lcs_id
+    lea rdi, [rsp]
+    call os_tty_raw
+    test rax, rax
+    js .Lcs_cont
+    lea rdi, [rsp]
+    call os_tty_restore
+    mov rdi, [rip + cl_sdir]
+    lea rsi, [rip + cl_cwd]
+    call session_recent
+    test rax, rax
+    jz .Lcs_new
+    mov [rsp + 64], rax
+    mov rdi, rax
+    call session_recent_count
+    mov [rsp + 72], rax
+    test rax, rax
+    jz .Lcsr_new
+    shl rax, 3
+    mov rdi, rax
+    call mem_alloc
+    mov [rsp + 80], rax
+    mov rdi, [rsp + 72]
+    shl rdi, 3
+    call mem_alloc
+    mov [rsp + 88], rax
+    xor r12d, r12d
+.Lcsr_fill:
+    cmp r12, [rsp + 72]
+    jae .Lcsr_call
+    mov rdi, [rsp + 64]
+    mov rsi, r12
+    call session_recent_id
+    mov rcx, [rsp + 80]
+    mov [rcx + r12*8], rax
+    mov rdi, [rsp + 64]
+    mov rsi, r12
+    call session_recent_desc
+    mov rcx, [rsp + 88]
+    mov [rcx + r12*8], rax
+    inc r12
+    jmp .Lcsr_fill
+.Lcsr_call:
+    lea rax, [rip + opcode_pick_tty]
+    test rax, rax
+    jz .Lcsr_nopick
+    lea rdi, [rip + .Lpick_title]
+    mov rsi, [rsp + 80]
+    mov rdx, [rsp + 88]
+    mov rcx, [rsp + 72]
+    xor r8d, r8d
+    call rax
+    jmp .Lcsr_got
+.Lcsr_nopick:
+    xor eax, eax
+.Lcsr_got:
+    mov [rsp + 96], rax
+    mov rdi, [rsp + 80]
+    call mem_free
+    mov rdi, [rsp + 88]
+    call mem_free
+    mov rax, [rsp + 96]
+    test rax, rax
+    js .Lcsr_new
+    cmp rax, [rsp + 72]
+    jae .Lcsr_new
+    mov rdi, [rsp + 64]
+    mov rsi, rax
+    call session_recent_path
+    mov rdi, rax
+    call session_open
+    test rax, rax
+    jz .Lcsr_fail
+    mov [rip + g_agent_session], rax
+    mov rdi, [rsp + 64]
+    call session_recent_free
+    jmp .Lcs_ok
+.Lcsr_new:
+    mov rdi, [rsp + 64]
+    call session_recent_free
+    jmp .Lcs_new
+.Lcsr_fail:
+    mov rdi, [rsp + 64]
+    call session_recent_free
+    jmp .Lcs_missing
 .Lcs_new:
     mov rdi, [rip + cl_sdir]
     lea rsi, [rip + cl_cwd]

@@ -9,6 +9,7 @@
 .Lopt_help:     .asciz "--help"
 .Lopt_h:        .asciz "-h"
 .Lopt_list:     .asciz "--list-sessions"
+.Lopt_listm:    .asciz "--list-models"
 .Lcmd_fetch:    .asciz "fetch"
 .Lcmd_login:    .asciz "login"
 .Lcmd_logout:   .asciz "logout"
@@ -27,6 +28,8 @@
     .ascii "  --version   print version and exit\n"
     .ascii "  --help      print this help and exit\n"
     .ascii "  --list-sessions   list this directory's sessions (newest first) and exit\n"
+    .ascii "  --list-models [F]  list known models (built-in + discovered), optionally\n"
+    .ascii "                     filtered by a substring of provider/id/name, then exit\n"
     .ascii "  -p PROMPT   run the agent on PROMPT and print the answer\n"
     .ascii "  login [provider]    OAuth login (openai, anthropic)\n"
     .ascii "  logout [provider]   remove stored credentials\n"
@@ -146,6 +149,69 @@ FN opcode_main
     call cstr_eq
     test eax, eax
     jnz .Llist_sessions
+    mov rdi, [r13 + 8]
+    lea rsi, [rip + .Lopt_listm]
+    call cstr_eq
+    test eax, eax
+    jnz .Llist_models
+    # --list-sessions/--list-models are top-level modes and may appear after
+    # agent flags (e.g. `opcode --offline --list-models`); scan the rest of
+    # argv so position among those flags does not matter.  A recognised
+    # argv[1] subcommand above still wins.
+    mov r14, 1
+.Lscan_sessions:
+    cmp r14, r12
+    jae .Lscan_models_start
+    mov rdi, [r13 + r14*8]
+    lea rsi, [rip + .Lopt_list]
+    call cstr_eq
+    test eax, eax
+    jnz .Llist_sessions
+    inc r14
+    jmp .Lscan_sessions
+.Lscan_models_start:
+    mov r14, 1
+.Lscan_models:
+    cmp r14, r12
+    jae .Ltui
+    mov rdi, [r13 + r14*8]
+    lea rsi, [rip + .Lopt_listm]
+    call cstr_eq
+    test eax, eax
+    jnz .Llist_models_any
+    inc r14
+    jmp .Lscan_models
+.Llist_models_any:
+    # Build a filtered argv for opcode_list_models_main: index 0 is a skipped
+    # placeholder (the flag itself), then every original argument except the
+    # flag.  This keeps options and their values adjacent while dropping the
+    # top-level mode flag the handler does not parse.
+    mov rax, r12
+    add rax, 2
+    and rax, -2
+    shl rax, 3
+    sub rsp, rax
+    mov rbx, rsp
+    mov rax, [r13 + r14*8]
+    mov [rbx], rax
+    mov rdx, 1
+    mov rcx, 1
+.Llist_build:
+    cmp rcx, r12
+    jae .Llist_build_done
+    cmp rcx, r14
+    je .Llist_build_skip
+    mov rax, [r13 + rcx*8]
+    mov [rbx + rdx*8], rax
+    inc rdx
+.Llist_build_skip:
+    inc rcx
+    jmp .Llist_build
+.Llist_build_done:
+    mov rdi, rdx
+    mov rsi, rbx
+    call opcode_list_models_main
+    EPILOGUE
     # no other subcommand: interactive TUI (flags are parsed there)
 .Ltui:
     lea rdi, [r12 - 1]
@@ -173,6 +239,14 @@ FN opcode_main
     xor esi, esi
     call session_list
     xor eax, eax
+    EPILOGUE
+.Llist_models:
+    # --list-models [FILTER]: built-in catalog + discovered entries (cache
+    # first unless --refresh-models/--offline say otherwise); exit 0 without
+    # starting the agent.
+    lea rdi, [r12 - 1]
+    lea rsi, [r13 + 8]
+    call opcode_list_models_main
     EPILOGUE
 .Llogin:
     lea rdi, [r12 - 1]

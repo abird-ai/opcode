@@ -2530,3 +2530,524 @@ FN session_list
 .Lslist_zero:
     mov rax, [rsp]
     EPILOGUE
+
+# ============================================================ session_recent
+# A programmatic newest-first list for the pre-TUI resume picker.  Each entry
+# owns its path/id/description; the description is the first user message's
+# first text block (newlines/tabs folded to spaces), or the empty string.
+STRUCT
+F SR_path, 8
+F SR_id, 8
+F SR_ts, 8
+F SR_desc, 8
+ENDSTRUCT SR_SIZE               # 32
+
+# .Lsanitize_into(sb rdi, ptr rsi, len rdx, cap rcx): append bytes, folding
+# CR/LF/TAB to spaces and stopping at `cap` total bytes.
+.Lsanitize_into:
+    PROLOGUE 16
+    mov rbx, rdi
+    mov r12, rsi
+    mov r13, rdx
+    mov r14, rcx
+    xor r15d, r15d
+.Lsan_loop:
+    cmp r15, r13
+    jae .Lsan_done
+    cmp qword ptr [rbx + SB_len], r14
+    jae .Lsan_done
+    movzx eax, byte ptr [r12 + r15]
+    cmp al, 10
+    je .Lsan_space
+    cmp al, 13
+    je .Lsan_space
+    cmp al, 9
+    jne .Lsan_put
+.Lsan_space:
+    mov al, ' '
+.Lsan_put:
+    mov rdi, rbx
+    mov esi, eax
+    call sb_push_byte
+    inc r15
+    jmp .Lsan_loop
+.Lsan_done:
+    EPILOGUE
+
+# session_summary(path rdi, timestamp_out rsi|0, desc_sb rdx): read the header
+# timestamp and the first user message's opening text into desc_sb.
+FN session_summary
+    PROLOGUE 96
+    mov [rsp], rdi
+    mov [rsp + 8], rsi
+    mov [rsp + 16], rdx
+    mov dword ptr [rsp + 64], 0
+    test rsi, rsi
+    jz 1f
+    mov qword ptr [rsi], 0
+1:  test rdx, rdx
+    jz 2f
+    mov rdi, rdx
+    call sb_clear
+2:  mov rdi, [rsp]
+    test rdi, rdi
+    jz .Lss_bad
+    mov esi, O_RDONLY | O_CLOEXEC
+    xor edx, edx
+    call os_open
+    test rax, rax
+    js .Lss_err
+    mov [rsp + 24], rax
+    mov edi, 65536
+    call mem_alloc
+    mov [rsp + 32], rax
+    xor r12d, r12d
+.Lss_read:
+    cmp r12, 65536
+    jae .Lss_scan_start
+    mov edi, [rsp + 24]
+    mov rsi, [rsp + 32]
+    add rsi, r12
+    mov edx, 65536
+    sub rdx, r12
+    call os_read
+    cmp rax, -EINTR
+    je .Lss_read
+    test rax, rax
+    js .Lss_readerr
+    jz .Lss_scan_start
+    add r12, rax
+    jmp .Lss_read
+.Lss_scan_start:
+    mov [rsp + 40], r12
+    xor r13d, r13d
+.Lss_line:
+    cmp r13, [rsp + 40]
+    jae .Lss_done
+    mov rbx, [rsp + 32]
+    mov rcx, r13
+.Lss_findnl:
+    cmp rcx, [rsp + 40]
+    jae .Lss_lineend
+    cmp byte ptr [rbx + rcx], 10
+    je .Lss_lineend
+    inc rcx
+    jmp .Lss_findnl
+.Lss_lineend:
+    mov [rsp + 48], rcx
+    lea rdi, [rbx + r13]
+    mov rsi, rcx
+    sub rsi, r13
+    test rsi, rsi
+    jz .Lss_next
+    call json_parse
+    test rax, rax
+    jz .Lss_next
+    mov r14, rax
+    mov rdi, r14
+    lea rsi, [rip + .Lk_type]
+    call json_get_cstr
+    test rax, rax
+    jz .Lss_next
+    mov [rsp + 56], rax
+    mov rdi, rax
+    lea rsi, [rip + .Lv_session]
+    call .Lcstr_eq
+    test eax, eax
+    jnz .Lss_header
+    mov rdi, [rsp + 56]
+    lea rsi, [rip + .Lv_message]
+    call .Lcstr_eq
+    test eax, eax
+    jnz .Lss_message
+    jmp .Lss_next
+.Lss_header:
+    mov rdi, r14
+    lea rsi, [rip + .Lk_timestamp]
+    xor edx, edx
+    call json_get_u64
+    mov rcx, [rsp + 8]
+    test rcx, rcx
+    jz .Lss_next
+    mov [rcx], rax
+    jmp .Lss_next
+.Lss_message:
+    cmp dword ptr [rsp + 64], 0
+    jne .Lss_done
+    mov rdi, r14
+    lea rsi, [rip + .Lk_message]
+    call json_get
+    test rax, rax
+    jz .Lss_next
+    mov r15, rax
+    mov rdi, r15
+    lea rsi, [rip + .Lk_role]
+    call json_get_cstr
+    test rax, rax
+    jz .Lss_next
+    mov rdi, rax
+    lea rsi, [rip + .Lv_user]
+    call .Lcstr_eq
+    test eax, eax
+    jz .Lss_next
+    mov rdi, r15
+    lea rsi, [rip + .Lk_content]
+    call json_get
+    test rax, rax
+    jz .Lss_found
+    cmp dword ptr [rax + JV_type], JT_ARR
+    jne .Lss_found
+    mov [rsp + 72], rax
+    mov rdi, rax
+    call json_len
+    mov [rsp + 80], rax
+    xor r12d, r12d
+.Lss_blk:
+    cmp r12, [rsp + 80]
+    jae .Lss_found
+    mov rdi, [rsp + 72]
+    mov esi, r12d
+    call json_at
+    test rax, rax
+    jz .Lss_bnext
+    mov r15, rax
+    mov rdi, rax
+    lea rsi, [rip + .Lk_type]
+    call json_get_cstr
+    test rax, rax
+    jz .Lss_bnext
+    mov rdi, rax
+    lea rsi, [rip + .Lv_text]
+    call .Lcstr_eq
+    test eax, eax
+    jz .Lss_bnext
+    mov rdi, r15
+    lea rsi, [rip + .Lk_text]
+    call json_get
+    mov rdi, rax
+    call json_str
+    test rax, rax
+    jz .Lss_found
+    mov rsi, rax
+    mov rdi, [rsp + 16]
+    test rdi, rdi
+    jz .Lss_found
+    mov rcx, 200
+    call .Lsanitize_into
+    jmp .Lss_found
+.Lss_bnext:
+    inc r12
+    jmp .Lss_blk
+.Lss_found:
+    mov dword ptr [rsp + 64], 1
+.Lss_next:
+    mov rax, [rsp + 48]
+    cmp rax, [rsp + 40]
+    jae .Lss_done
+    inc rax
+    mov r13, rax
+    jmp .Lss_line
+.Lss_done:
+    mov edi, [rsp + 24]
+    call os_close
+    mov rdi, [rsp + 32]
+    call mem_free
+    xor eax, eax
+    EPILOGUE
+.Lss_readerr:
+    mov r12, rax
+    mov edi, [rsp + 24]
+    call os_close
+    mov rdi, [rsp + 32]
+    call mem_free
+    mov rax, r12
+    EPILOGUE
+.Lss_err:
+    EPILOGUE
+.Lss_bad:
+    mov rax, -EINVAL
+    EPILOGUE
+
+# session_recent_sort(vec VEC*): insertion sort by timestamp, descending.
+session_recent_sort:
+    PROLOGUE 32
+    mov rbx, rdi
+    mov r13, [rbx + VEC_len]
+    cmp r13, 2
+    jb .Lsrs_done
+    mov r14, 1
+.Lsrs_i:
+    cmp r14, r13
+    jae .Lsrs_done
+    mov rax, [rbx + VEC_ptr]
+    mov rcx, r14
+    shl rcx, 5
+    lea r12, [rax + rcx]
+    mov rax, [r12 + SR_path]
+    mov [rsp], rax
+    mov rax, [r12 + SR_id]
+    mov [rsp + 8], rax
+    mov rax, [r12 + SR_ts]
+    mov [rsp + 16], rax
+    mov rax, [r12 + SR_desc]
+    mov [rsp + 24], rax
+    mov r15, r14
+.Lsrs_shift:
+    test r15, r15
+    jz .Lsrs_place
+    mov rax, [rbx + VEC_ptr]
+    mov rcx, r15
+    shl rcx, 5
+    lea rcx, [rax + rcx - 32]
+    mov rax, [rcx + SR_ts]
+    cmp rax, [rsp + 16]
+    jae .Lsrs_place
+    mov rdx, [rcx + SR_path]
+    mov [rcx + 32 + SR_path], rdx
+    mov rdx, [rcx + SR_id]
+    mov [rcx + 32 + SR_id], rdx
+    mov rdx, [rcx + SR_ts]
+    mov [rcx + 32 + SR_ts], rdx
+    mov rdx, [rcx + SR_desc]
+    mov [rcx + 32 + SR_desc], rdx
+    dec r15
+    jmp .Lsrs_shift
+.Lsrs_place:
+    mov rax, [rbx + VEC_ptr]
+    mov rcx, r15
+    shl rcx, 5
+    add rax, rcx
+    mov rdx, [rsp]
+    mov [rax + SR_path], rdx
+    mov rdx, [rsp + 8]
+    mov [rax + SR_id], rdx
+    mov rdx, [rsp + 16]
+    mov [rax + SR_ts], rdx
+    mov rdx, [rsp + 24]
+    mov [rax + SR_desc], rdx
+    inc r14
+    jmp .Lsrs_i
+.Lsrs_done:
+    EPILOGUE
+
+# session_recent(dir cstr|0, cwd cstr|0) -> VEC* of SR | 0
+FN session_recent
+    PROLOGUE 192
+    mov [rsp], rdi
+    mov [rsp + 8], rsi
+    call .Lresolve_dir
+    test rax, rax
+    jz .Lsr_zero
+    mov [rsp + 16], rax
+    mov rdi, rax
+    mov esi, O_RDONLY | O_DIRECTORY | O_CLOEXEC
+    xor edx, edx
+    call os_open
+    test rax, rax
+    js .Lsr_freedir
+    mov [rsp + 24], rax
+    mov edi, 32768
+    call mem_alloc
+    mov [rsp + 32], rax
+    mov edi, VEC_SIZE
+    call mem_alloc
+    mov [rsp + 48], rax
+.Lsr_read:
+    mov edi, [rsp + 24]
+    mov rsi, [rsp + 32]
+    mov edx, 32768
+    call os_getdents
+    test rax, rax
+    js .Lsr_scan_done
+    jz .Lsr_scan_done
+    mov [rsp + 40], rax
+    xor r15d, r15d
+.Lsr_rec:
+    cmp r15, [rsp + 40]
+    jae .Lsr_read
+    mov rbx, [rsp + 32]
+    add rbx, r15
+    movzx eax, word ptr [rbx + 16]
+    test eax, eax
+    jz .Lsr_scan_done
+    mov [rsp + 80], rax
+    lea r14, [rbx + 19]
+    mov rdi, r14
+    call strlen
+    mov r13, rax
+    cmp r13, 16
+    jb .Lsr_next
+    lea rdi, [r14 + r13 - 6]
+    lea rsi, [rip + .Ljsonl]
+    mov edx, 6
+    call memeq
+    cmp eax, 1
+    jne .Lsr_next
+    mov rdi, r14
+    mov rsi, r13
+    call parse_u64
+    test rdx, rdx
+    jz .Lsr_next
+    cmp byte ptr [r14 + rdx], '_'
+    jne .Lsr_next
+    lea rcx, [rdx + 15]
+    cmp rcx, r13
+    jne .Lsr_next
+    mov [rsp + 96], rax
+    mov [rsp + 104], rdx
+    mov rdi, [rsp + 16]
+    mov rsi, r14
+    call .Lpath_join
+    test rax, rax
+    jz .Lsr_next
+    mov [rsp + 112], rax
+    mov rsi, [rsp + 104]
+    lea rdi, [r14 + rsi + 1]
+    mov esi, 8
+    call mem_dup
+    mov [rsp + 120], rax
+    mov qword ptr [rsp + 128], 0
+    mov qword ptr [rsp + 136 + SB_ptr], 0
+    mov qword ptr [rsp + 136 + SB_len], 0
+    mov qword ptr [rsp + 136 + SB_cap], 0
+    mov rdi, [rsp + 112]
+    lea rsi, [rsp + 128]
+    lea rdx, [rsp + 136]
+    call session_summary
+    mov rax, [rsp + 136 + SB_ptr]
+    test rax, rax
+    jz .Lsr_nodesc
+    mov rdi, rax
+    mov rsi, [rsp + 136 + SB_len]
+    call mem_dup
+    jmp .Lsr_havedesc
+.Lsr_nodesc:
+    lea rdi, [rip + .Lempty]
+    xor esi, esi
+    call mem_dup
+.Lsr_havedesc:
+    mov [rsp + 160], rax
+    mov rax, [rsp + 128]
+    test rax, rax
+    jnz 1f
+    mov rax, [rsp + 96]
+1:  mov [rsp + 168], rax
+    mov rdi, [rsp + 48]
+    mov esi, SR_SIZE
+    call vec_push
+    mov rcx, [rsp + 112]
+    mov [rax + SR_path], rcx
+    mov rcx, [rsp + 120]
+    mov [rax + SR_id], rcx
+    mov rcx, [rsp + 168]
+    mov [rax + SR_ts], rcx
+    mov rcx, [rsp + 160]
+    mov [rax + SR_desc], rcx
+    lea rdi, [rsp + 136]
+    call sb_free
+.Lsr_next:
+    add r15, [rsp + 80]
+    jmp .Lsr_rec
+.Lsr_scan_done:
+    mov edi, [rsp + 24]
+    call os_close
+    mov rdi, [rsp + 32]
+    call mem_free
+    mov rdi, [rsp + 48]
+    call session_recent_sort
+    mov rax, [rsp + 48]
+    mov rbx, rax
+    mov rdi, [rsp + 16]
+    call mem_free
+    mov rax, rbx
+    EPILOGUE
+.Lsr_freedir:
+    mov rdi, [rsp + 16]
+    call mem_free
+.Lsr_zero:
+    xor eax, eax
+    EPILOGUE
+
+# session_recent_count(vec) / _path / _id / _ts / _desc accessors.
+FN session_recent_count
+    xor eax, eax
+    test rdi, rdi
+    jz .Lsrc_ret
+    mov rax, [rdi + VEC_len]
+.Lsrc_ret:
+    ret
+
+FN session_recent_path
+    xor eax, eax
+    test rdi, rdi
+    jz 1f
+    cmp rsi, [rdi + VEC_len]
+    jae 1f
+    mov rax, [rdi + VEC_ptr]
+    shl rsi, 5
+    mov rax, [rax + rsi + SR_path]
+1:  ret
+
+FN session_recent_id
+    xor eax, eax
+    test rdi, rdi
+    jz 1f
+    cmp rsi, [rdi + VEC_len]
+    jae 1f
+    mov rax, [rdi + VEC_ptr]
+    shl rsi, 5
+    mov rax, [rax + rsi + SR_id]
+1:  ret
+
+FN session_recent_ts
+    xor eax, eax
+    test rdi, rdi
+    jz 1f
+    cmp rsi, [rdi + VEC_len]
+    jae 1f
+    mov rax, [rdi + VEC_ptr]
+    shl rsi, 5
+    mov rax, [rax + rsi + SR_ts]
+1:  ret
+
+FN session_recent_desc
+    xor eax, eax
+    test rdi, rdi
+    jz 1f
+    cmp rsi, [rdi + VEC_len]
+    jae 1f
+    mov rax, [rdi + VEC_ptr]
+    shl rsi, 5
+    mov rax, [rax + rsi + SR_desc]
+1:  ret
+
+# session_recent_free(vec): free every owned string, the entries and the VEC.
+FN session_recent_free
+    PROLOGUE 16
+    test rdi, rdi
+    jz .Lsrf_done
+    mov rbx, rdi
+    mov r13, [rbx + VEC_len]
+    mov r14, [rbx + VEC_ptr]
+    xor r12d, r12d
+.Lsrf_loop:
+    cmp r12, r13
+    jae .Lsrf_vec
+    mov rax, r12
+    shl rax, 5
+    lea r15, [r14 + rax]
+    mov rdi, [r15 + SR_path]
+    call mem_free
+    mov rdi, [r15 + SR_id]
+    call mem_free
+    mov rdi, [r15 + SR_desc]
+    call mem_free
+    inc r12
+    jmp .Lsrf_loop
+.Lsrf_vec:
+    mov rdi, rbx
+    call vec_free
+    mov rdi, rbx
+    call mem_free
+.Lsrf_done:
+    EPILOGUE
