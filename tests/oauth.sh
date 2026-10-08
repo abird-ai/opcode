@@ -513,6 +513,70 @@ kill "$apid" 2>/dev/null || true
 wait "$apid" 2>/dev/null || true
 apid=""
 
+# --------------------------------------------- login --manual paste forms
+# A full redirect URL can carry the state in the query or in the '#' fragment,
+# and a terminal with bracketed paste enabled wraps the line in ESC[200~ /
+# ESC[201~.  Each case drives /authorize first so the mock records the PKCE
+# challenge, then feeds the crafted line to the manual login's stdin.
+manual_login() { # form-template (with <STATE>) -> rc; output in $tmp/manual.out
+    python3 - "$1" "$port" > "$tmp/manual.out" 2>&1 <<'PY'
+import subprocess, sys, urllib.error, urllib.parse, urllib.request
+
+form, port = sys.argv[1], sys.argv[2]
+p = subprocess.Popen(
+    ["./build/opcode", "login", "anthropic", "--manual",
+     "--oauth-auth-url", "http://127.0.0.1:%s/authorize" % port,
+     "--oauth-token-url", "http://127.0.0.1:%s/token" % port,
+     "--oauth-client-id", "test-client", "--oauth-scope", "test-scope"],
+    stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+url = None
+err = b""
+while True:
+    line = p.stderr.readline()
+    err += line
+    if not line:
+        break
+    if line.startswith(b"http"):
+        url = line.decode().strip()
+        break
+if url is None:
+    sys.stdout.write((err + p.stderr.read()).decode(errors="replace"))
+    sys.exit(3)
+state = urllib.parse.parse_qs(urllib.parse.urlparse(url).query)["state"][0]
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *a, **k):
+        return None
+opener = urllib.request.build_opener(NoRedirect)
+try:
+    opener.open(url, timeout=5).read()
+except urllib.error.HTTPError:
+    pass
+except Exception:
+    pass
+p.stdin.write((form.replace("<STATE>", state) + "\n").encode())
+p.stdin.flush()
+out, rest = p.communicate(timeout=30)
+sys.stdout.write((out + err + rest).decode(errors="replace"))
+sys.exit(p.returncode)
+PY
+}
+run_manual_form() { # name form-template
+    rc=0
+    manual_login "$2" || rc=$?
+    check "$1-rc" 0 "$rc"
+    contains "$1-msg" "logged in to anthropic" "$(cat "$tmp/manual.out")"
+}
+run_manual_form oauth-manual-fragment \
+    'http://localhost:53692/callback?code=TESTCODE#<STATE>'
+run_manual_form oauth-manual-query-fragment \
+    'http://localhost:53692/callback?code=TESTCODE&state=<STATE>#x'
+run_manual_form oauth-manual-code-hash 'TESTCODE#<STATE>'
+run_manual_form oauth-manual-query \
+    'http://localhost:53692/callback?code=TESTCODE&state=<STATE>'
+esc=$(printf '\033')
+run_manual_form oauth-manual-bracketed-paste \
+    "${esc}[200~http://localhost:53692/callback?code=TESTCODE#<STATE>${esc}[201~"
+
 # ---------------------------------------------------------------- logout
 out=$(timeout 30 ./build/opcode logout anthropic)
 contains oauth-logout-msg "removed stored credential for anthropic" "$out"

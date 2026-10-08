@@ -1516,7 +1516,10 @@ FN oauth_sha256
     mov r9, rdx
 4:  cmp rdx, r12
     jae 5f
-    cmp byte ptr [rbx + rdx], '&'
+    mov cl, [rbx + rdx]
+    cmp cl, '&'
+    je 5f
+    cmp cl, '#'
     je 5f
     inc rdx
     jmp 4b
@@ -1622,6 +1625,77 @@ FN oauth_sha256
     mov rdx, rsi
     ret
 
+# .Lclean(ptr, len) -> rax ptr, rdx len.  Strips a bracketed-paste marker
+# (a leading "[200~" or trailing "[201~", with or without the ESC that
+# normally precedes it), any stray leading/trailing control bytes, and the
+# ASCII whitespace handled by .Ltrim.  Used before parsing a pasted line so a
+# terminal that left bracketed paste enabled cannot poison the values.
+.Lclean:
+    PROLOGUE 0
+    mov rbx, rdi
+    mov r12, rsi
+.Lcl_lead:
+    test r12, r12
+    jz .Lcl_done
+    movzx eax, byte ptr [rbx]
+    cmp al, 0x20
+    jb .Lcl_lead_adv
+    cmp al, 0x7f
+    jne .Lcl_marker
+.Lcl_lead_adv:
+    inc rbx
+    dec r12
+    jmp .Lcl_lead
+.Lcl_marker:
+    cmp r12, 5
+    jb .Lcl_tail
+    cmp byte ptr [rbx], '['
+    jne .Lcl_tail
+    cmp byte ptr [rbx + 1], '2'
+    jne .Lcl_tail
+    cmp byte ptr [rbx + 2], '0'
+    jne .Lcl_tail
+    cmp byte ptr [rbx + 3], '0'
+    jne .Lcl_tail
+    cmp byte ptr [rbx + 4], '~'
+    jne .Lcl_tail
+    add rbx, 5
+    sub r12, 5
+    jmp .Lcl_lead
+.Lcl_tail:
+    test r12, r12
+    jz .Lcl_done
+    cmp r12, 5
+    jb .Lcl_tctl
+    mov rax, r12
+    sub rax, 5
+    cmp byte ptr [rbx + rax], '['
+    jne .Lcl_tctl
+    cmp byte ptr [rbx + rax + 1], '2'
+    jne .Lcl_tctl
+    cmp byte ptr [rbx + rax + 2], '0'
+    jne .Lcl_tctl
+    cmp byte ptr [rbx + rax + 3], '1'
+    jne .Lcl_tctl
+    cmp byte ptr [rbx + rax + 4], '~'
+    jne .Lcl_tctl
+    sub r12, 5
+    jmp .Lcl_tail
+.Lcl_tctl:
+    movzx eax, byte ptr [rbx + r12 - 1]
+    cmp al, 0x20
+    jb .Lcl_tail_adv
+    cmp al, 0x7f
+    jne .Lcl_done
+.Lcl_tail_adv:
+    dec r12
+    jmp .Lcl_tail
+.Lcl_done:
+    mov rdi, rbx
+    mov rsi, r12
+    call .Ltrim
+    EPILOGUE
+
 # .Lread_line(buf, cap) -> rax bytes read (terminator stripped), 0 at EOF,
 # -errno on failure.  Reads one byte at a time so a CR/LF is never consumed
 # past the line.
@@ -1656,9 +1730,12 @@ FN oauth_sha256
 
 # .Lparse_pasted(buf, len, &code, &codelen, &state, &statelen) -> eax 1|0.
 # Accepts a full redirect URL, a bare query ("code=..&state=.."), "code#state",
-# or a bare code.  Returned pointers alias buf; values are URL-decoded in place.
+# or a bare code.  For a full URL the state may live in the query or in the
+# "#" fragment (with an optional "state=").  Bracketed-paste markers and stray
+# control bytes are stripped first.  Returned pointers alias buf; values are
+# URL-decoded in place.
 .Lparse_pasted:
-    PROLOGUE 48
+    PROLOGUE 64
     mov [rsp + 0], rdx
     mov [rsp + 8], rcx
     mov [rsp + 16], r8
@@ -1672,7 +1749,7 @@ FN oauth_sha256
     mov [rdx], rax
     mov rdx, [rsp + 24]
     mov [rdx], rax
-    call .Ltrim
+    call .Lclean
     mov rbx, rax
     mov r12, rdx
     test r12, r12
@@ -1735,8 +1812,30 @@ FN oauth_sha256
 .Lpp_query:
     mov [rsp + 32], r14
     mov [rsp + 40], r15
-    mov rdi, r14
-    mov rsi, r15
+    # A full redirect URL may carry the state as the "#" fragment while the
+    # query holds only code.  Locate the fragment in the whole trimmed line
+    # (0 when absent) before parsing the query params.
+    xor eax, eax
+    mov [rsp + 48], rax
+    mov [rsp + 56], rax
+    xor r13d, r13d
+.Lpp_fscan:
+    cmp r13, r12
+    jae .Lpp_fdone
+    cmp byte ptr [rbx + r13], '#'
+    je .Lpp_ffound
+    inc r13
+    jmp .Lpp_fscan
+.Lpp_ffound:
+    lea rax, [rbx + r13 + 1]
+    mov [rsp + 48], rax
+    mov rcx, r12
+    sub rcx, r13
+    dec rcx
+    mov [rsp + 56], rcx
+.Lpp_fdone:
+    mov rdi, [rsp + 32]
+    mov rsi, [rsp + 40]
     lea rdx, [rip + .Lqs_code]
     call .Lqparam
     test rax, rax
@@ -1755,7 +1854,48 @@ FN oauth_sha256
     lea rdx, [rip + .Lqs_state]
     call .Lqparam
     test rax, rax
+    jnz .Lpp_state
+    # no state in the query: use the "#" fragment when there is one, after an
+    # optional literal "state=" and stopping at '&'
+    mov r13, [rsp + 48]
+    test r13, r13
     jz .Lpp_ok
+    mov rbx, [rsp + 56]
+    cmp rbx, 6
+    jb .Lpp_fuse
+    cmp byte ptr [r13], 's'
+    jne .Lpp_fuse
+    cmp byte ptr [r13 + 1], 't'
+    jne .Lpp_fuse
+    cmp byte ptr [r13 + 2], 'a'
+    jne .Lpp_fuse
+    cmp byte ptr [r13 + 3], 't'
+    jne .Lpp_fuse
+    cmp byte ptr [r13 + 4], 'e'
+    jne .Lpp_fuse
+    cmp byte ptr [r13 + 5], '='
+    jne .Lpp_fuse
+    add r13, 6
+    sub rbx, 6
+.Lpp_fuse:
+    xor ecx, ecx
+.Lpp_famp:
+    cmp rcx, rbx
+    jae .Lpp_fampdone
+    cmp byte ptr [r13 + rcx], '&'
+    je .Lpp_fampdone
+    inc rcx
+    jmp .Lpp_famp
+.Lpp_fampdone:
+    mov rsi, rcx
+    mov rdi, r13
+    call .Lurldecode
+    mov rdi, [rsp + 16]
+    mov [rdi], r13
+    mov rdi, [rsp + 24]
+    mov [rdi], rax
+    jmp .Lpp_ok
+.Lpp_state:
     mov r13, rax
     mov rbx, rdx
     mov rdi, r13
