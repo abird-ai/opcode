@@ -511,6 +511,15 @@ int opcode_snprintf(char *buf, size_t n, const char *fmt, ...)
     return ret;
 }
 
+#if defined(__APPLE__)
+/* libSystem provides vsnprintf/snprintf, and the Apple SDK defines them as
+ * secure _chk macros, so redefining them here both fails to compile and would
+ * shadow libc.  Freestanding targets (Linux, Windows) have no libc and need the
+ * shims below; mbedTLS itself always uses the hooks installed by
+ * opcode_platform_setup(). */
+#else
+#undef vsnprintf
+#undef snprintf
 int vsnprintf(char *buf, size_t n, const char *fmt, va_list ap)
 {
     return opcode_vsnprintf(buf, n, fmt, ap);
@@ -525,6 +534,7 @@ int snprintf(char *buf, size_t n, const char *fmt, ...)
     va_end(ap);
     return ret;
 }
+#endif
 
 /* --------------------------------------------------------------- setup hook */
 int opcode_platform_setup(void)
