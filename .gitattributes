@@ -1,0 +1,4 @@
+# Byte-exact capture goldens must survive a fresh checkout unmodified, so git
+# must not do end-of-line or other text normalization on them.
+tests/data/*_capture.expected -text
+tests/data/*.wire -text

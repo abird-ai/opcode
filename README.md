@@ -143,6 +143,8 @@ If you have a Mac or AArch64 Linux hardware, testing is genuinely useful:
 
 ```sh
 ./build/opcode                          # interactive TUI (inline scrollback by default)
+./build/opcode --list-sessions          # list this directory's sessions, newest first, then exit
+./build/opcode --verbose                # same TUI, with request/response/tool diagnostics on stderr
 ./build/opcode --tui-mode fullscreen    # full-screen renderer instead
 ./build/opcode -p "explain this project"   # one-shot: run and print the answer
 ./build/opcode --mode json -p "hi"      # machine-readable JSONL events
@@ -168,7 +170,9 @@ All files are JSONC (comments and trailing commas; unknown keys are ignored):
 - **User config** — `$XDG_CONFIG_HOME/opcode/config.jsonc` (default
   `~/.config/opcode/config.jsonc`).
 - **Project config** — `<cwd>/.opcode/config.jsonc`, loaded only when the
-  directory is trusted (`trust.jsonc`, `--approve`).
+  directory is trusted: `--approve`, an interactive `trust this directory?
+  [y/N]` prompt in a TTY TUI (saved to `trust.jsonc`), or an existing
+  `trust.jsonc` entry.
 - **Keys read by this build**: `default_provider`, `default_model`,
   `session_dir`, `theme`, `default_thinking`, `providers.<id>.base_url`,
   `api_keys.<id>`.
@@ -190,6 +194,8 @@ All files are JSONC (comments and trailing commas; unknown keys are ignored):
 
 - **MCP servers** — stdio JSON-RPC configured in `mcp.jsonc` (config dir and
   project `.opcode/`); server tools are exposed as `mcp__<server>__<tool>`.
+  Transport is stdio and only `tools/*` is read; a server `isError` maps to a
+  tool error and shutdown is `SIGTERM` → bounded reap → `SIGKILL`.
 - **Static C plugins** — the stable C ABI lives in
   [`include/opcode_plugin.h`](include/opcode_plugin.h); plugins are listed in
   `plugins/manifest.json`, and `tools/gen-plugins.py` plus the Makefile link
@@ -200,7 +206,8 @@ All files are JSONC (comments and trailing commas; unknown keys are ignored):
   current host limitations and the runtime-loading options are documented in
   [`.agents/docs/extensibility.md`](.agents/docs/extensibility.md).
 - **Machine modes** — `--mode json` (JSONL events) and `--mode rpc` (own
-  documented command set) for editors and harnesses.
+  documented command set) for editors and harnesses. `--verbose` raises the log
+  gate to `LOG_DEBUG` and prints request/response/tool diagnostics on stderr.
 
 ## Architecture
 

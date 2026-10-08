@@ -46,13 +46,24 @@ only genuine marks; callers store a control as a space and drop the rest.
 ## src/base/log.s
 
 ```
+LOG_ERROR 0, LOG_INFO 1, LOG_DEBUG 2        # level scale
 write_all(fd, ptr, len) -> 0 | -errno   (retries EINTR/EAGAIN)
 log_write(ptr, len) -> 0 | -errno       (fd 2)
 log_cstr(cstr)
 log_u64(value)
 log_nl()
+log_set_level(level)                   # set the log_debug_* threshold
+g_log_level: .long                     # current threshold (LOG_ERROR by default)
+log_debug_write(ptr, len) -> 0 | -errno # log_write only when g_log_level >= LOG_DEBUG
+log_debug_cstr(cstr)
+log_debug_u64(value)
+log_debug_nl()
 die(cstr)                               (stderr + os_exit(1); never returns)
 ```
+
+The `log_debug_*` functions are no-ops below `LOG_DEBUG`, so the hot paths pay
+one compare; `agent_init` raises the gate to `LOG_DEBUG` when `--verbose` set
+`g_agent_verbose` (`src/core/API.md`).
 
 ## src/base/mem.s
 

@@ -22,12 +22,15 @@ selected at link time.
 | `prov/` | implemented — Anthropic Messages, OpenAI Chat/Responses, Ollama, ollama-cloud, Google |
 | `tools/` | implemented — `read`, `bash`, `edit`, `write`, `ls`, `find`, `grep` |
 | `tui/` | implemented — terminal lifecycle, cell renderer, input parser, editor, view buffer, markdown-lite, inline and fullscreen modes, headless script runner |
-| `ext/` | static C plugins implemented (ABI header, host vtable, static loader, example plugin, plugin test); stdio MCP client implemented. Runtime plugin loading is the remaining piece |
+| `ext/` | static C plugins implemented (ABI header, host vtable, static loader, example plugin, plugin test; plugin commands are dispatched and listed in the slash menu, prompt `snippet`/`guidelines` and `resources_discover` roots are wired); stdio MCP client implemented (tools only, `result.isError` mapped, SIGTERM→bounded reap→SIGKILL shutdown). Runtime plugin loading and the rest of the host vtable are the remaining pieces |
 | `app/` | implemented — TUI/print/JSON/RPC modes, subcommands, flags |
 
 Remaining work is limited to genuinely unimplemented items: runtime plugin
-loading (`.agents/docs/extensibility.md` §3.2), a retry/backoff layer for
-transient network and HTTP 429/5xx failures (`src/wire/retry.s` is not in the
+loading and the host-vtable gaps (hook-bus event dispatch, plugin prompt
+sections, async tools, custom providers, `set_status`/`set_title`,
+`http_request`; `.agents/docs/extensibility.md` §3.2), MCP beyond stdio tools
+(HTTP transport, prompts/resources, pagination, `${ENV}`), a retry/backoff layer
+for transient network and HTTP 429/5xx failures (`src/wire/retry.s` is not in the
 tree), and the riscv64 port.
 
 ## 2. Testing strategy
@@ -78,7 +81,8 @@ binaries and `tests/run.sh` on the ported runtime.
   x86-64 recipe (`make windows-x86_64`, `make test-wine`) live in the same
   `Makefile` and are exercised by the flake packages/checks. riscv64 only has
   cross binutils staged and no port sources (see `.agents/docs/ports.md`).
-  `opcode update` checks the GitHub release endpoint.
+  `opcode update` checks the GitHub release endpoint
+  (`https://api.github.com/repos/abird-ai/opcode/releases/latest`).
 
 ## 4. Performance
 

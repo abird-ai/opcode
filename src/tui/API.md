@@ -111,10 +111,12 @@ under a full-line clear (`ESC[2K`); a frame is one write bracketed by
 `ESC[?7l`/`ESC[?7h` so a repaint cannot leave the terminal in a pending-wrap
 state. Finished whole transcript messages are committed at the region top with
 newline mode, so they flow up into real scrollback; a live block taller than the
-region shows its tail. Commit happens only while the agent is idle, so a running
-card or streaming message is never printed twice; `t_in_commit` (message index)
-and `t_in_live_base` (its view-row count at the current width) bound the
-committed prefix.
+region shows its tail. The commit is progressive: the largest finished prefix
+(whole messages with no still-running tool card, `tui_commit_prefix_len`) is
+printed on every frame while a run streams, and `t_in_offset` (view rows already
+printed) plus `t_in_base_len` (the transcript length the view prefix covered)
+keep a rebuild or a second frame from printing a row twice. A live (streaming or
+running-card) block is rendered after `t_in_live_base` and never committed.
 
 On resize the terminal has already reflowed, so `inline_region_erase` clears the
 region with cursor-relative movement only (`ESC7` `ESC[2K` `ESC[1B` …, `ESC8`) —
@@ -278,6 +280,9 @@ Only Up/Down/Tab/Enter(no Alt)/Esc are consumed; the shell reads
 `menu_name(menu_sel())` itself to complete or dispatch on Tab/Enter. Entries
 render as `/name` plus a dim description, selected row reverse-video, at most 8
 visible rows. A missing description (`menu_desc` returns 0,0) is simply not drawn.
+Placement is the caller's: fullscreen draws the menu above the composer (between
+the transcript and the queue strip), inline below the composer (between the
+composer and the footer).
 
 ## src/tui/status.s
 
@@ -311,7 +316,8 @@ snapshot only when `status_version()` changes. The built-in provider emits LEFT
 negative) and RIGHT `ready`/`<spin> <elapsed>`; `status_render` fills the footer
 band, joins LEFT with `" | "`, right-aligns RIGHT (the right slot wins a full row,
 LEFT is clipped first). `status_builtin_set` invalidates only when a rendered field
-actually changed.
+actually changed. The TUI fills `ST_cost_micro = -1` (no pricing table), so the
+cost segment is currently omitted.
 
 ## src/tui/markdown.s
 
@@ -443,7 +449,8 @@ g_tui_headless: .quad # --headless WxH
 tui_run(argc, argv) -> exit code
 ```
 Script verbs (one per line, `#` comments): `type TEXT`, `key NAME` (up, down, enter,
-esc, tab, backspace, ctrl-c, ctrl-o ...), `wait MS`, `prompt TEXT` (submit a
+`alt-enter` (inserts a newline), esc, tab, backspace, ctrl-c, ctrl-o ...),
+`wait MS`, `prompt TEXT` (submit a
 message), `print-screen`, `resize W H`, `quit`.
 
 Slash grammar: a submitted line is split at the first space/tab/newline into a

@@ -43,13 +43,16 @@ Implemented — **stdio transport only**:
   deadline; `result.content[].text` is joined with newlines. The request pipe
   is non-blocking and every write carries the same 10 s deadline, so a server
   that stops reading cannot wedge the agent (`mcp_write_all`).
-- Shutdown: close stdin → `SIGTERM` → `SIGKILL` (the child is its own process
-  group, so its descendants are signalled too).
+- Shutdown: close stdin → `SIGTERM` → a bounded, non-blocking reap (200 ms
+  `WNOHANG` poll) → `SIGKILL` → a final blocking reap (`mcp_stop`). The child is
+  its own process group, so its descendants are signalled too. A `result` with
+  `isError:true` sets the job's error flag, so the tool result is reported as a
+  tool error.
 
 Deferred: Streamable HTTP transport, `${ENV}` expansion, `nextCursor`
 pagination, `notifications/tools/list_changed` re-sync, per-server
-`enabled`/`exposure`/`timeout`, structured content/`isError` mapping,
-non-blocking connect.
+`enabled`/`exposure`/`timeout`, non-blocking connect. MCP is **stdio only** and
+exposes **tools only**; prompts and resources are not read.
 
 ### 1.2 RPC mode (`--mode rpc`)
 
@@ -89,10 +92,15 @@ No code execution; everything is parsed with the same JSONC/JSONL helpers:
 - Prompt templates: `<config>/prompts/*.md` and `<cwd>/.opcode/prompts/*.md`,
   selected with `--template NAME [args...]`.
 - `<config>/trust.jsonc` with `{"trusted":["/abs/cwd", ...]}` gates project
-  config, project context files and project skills.
+  config, project context files and project skills. An interactive TUI on a TTY
+  can also prompt for trust and save the answer (`config_trust_ask` /
+  `config_trust_save`).
 
-Themes and keybindings are not configurable in this build; the TUI uses its
-built-in palette and key map.
+Themes are configurable: `--theme` / config `theme`, and named
+`themes/<name>.jsonc` files under the config dir, a trusted project
+`<cwd>/.opcode/themes`, or a `resources_discover` theme root, overriding the
+built-in `dark`/`light`/`system` palette. Keybindings are not configurable in
+this build; the TUI uses its built-in readline key map.
 
 ## 3. Native plugins — the C ABI
 
@@ -131,19 +139,44 @@ the same registry and are validated by the schema-driven `tool_validate`.
 `plugins/example_c/plugin.c`
 is the in-tree example and `tests/plugin_test.s` exercises it.
 
-### 3.2 Current host limitations
+### 3.2 Host status and limitations
 
-The M6 host implementation (`src/ext/host.s`) records more than it delivers:
+The M6 host implementation (`src/ext/host.s`) now wires part of the table:
 
-- `session_id`, `session_file` and `system_prompt` return 0.
+- Plugin **commands are dispatched**: `host->register_command` rows are listed
+  in the TUI slash menu (after built-ins, templates and skills) and a matching
+  `/name` calls the handler; the handler's returned cstr becomes a notice. See
+  `tui_cmd_ext` in `src/app/tui.s`.
+- `register_tool` copies the descriptor's `prompt_snippet`/`prompt_guidelines`
+  into the appended `TL_snippet`/`TL_guidelines` fields and sets `TL_PROMPT`, so
+  `prompt_build` uses the snippet as the tool's `# Tools` line and emits the
+  guidelines as extra `# Rules` bullets.
+- **`resources_discover` is emitted once at startup** (`plugins_init` calls
+  `resources_discover_emit` after every handler is registered) with the payload
+  `{"cwd":...,"trusted":...}`. A handler registers directories with
+  `host->add_resource_root("skills"|"prompts"|"themes", path)` (absolute, no
+  `..`, at most 8 roots per kind); `prompt.s` scans the skill/prompt roots and
+  `theme.s` the theme roots. The initial template/theme selection runs before the
+  event, so those roots are not visible to it; `/theme` and a later re-scan do
+  see them.
 - `append_entry` writes a `custom` session entry when a session is active.
 - `defer` runs the callback immediately (single-threaded host).
-- `is_cancelled` always returns 0; `http_request`/`http_cancel` return 0.
-- `register_tool` wraps the plugin tool in an internal descriptor and completes
-  synchronously; `OPCODE_TOOL_THREADSAFE` is not honoured.
-- Events and commands are recorded in static tables
-  (`opcode_host_events`/`opcode_host_commands` plus counts) but are **not
-  dispatched to handlers** yet; `tool_call` vetoing is likewise not wired.
+
+Still **not implemented** in the host/ABI:
+
+- `set_status`/`set_title` have no effect (both are no-ops); `session_id`,
+  `session_file` and `system_prompt` return 0.
+- Hook-bus event dispatch: apart from `resources_discover`, `on_event`
+  registrations are recorded in `opcode_host_events` but never invoked, and
+  `tool_call` vetoing is not wired.
+- Prompt sections contributed by a plugin (other than the per-tool
+  snippet/guidelines above) are not composed.
+- Asynchronous tools: `register_tool` completes synchronously and
+  `OPCODE_TOOL_THREADSAFE` is not honoured; `is_cancelled` always returns 0.
+- Custom providers (`set_model`/`set_thinking_level` are no-ops), dynamic
+  loading, and `http_request`/`http_cancel` (always return 0).
+- Only a C example ships (`plugins/example_c/`); there are no Rust or Zig
+  examples.
 
 Runtime loading is future work. Because a static `-nostdlib` binary cannot use
 `dlopen`, the options are an in-process ELF relocator for a restricted subset
@@ -160,7 +193,8 @@ The names accepted by `host->on_event` are the `OPCODE_EV_*` macros in
 `tool_execution_start`, `tool_execution_update`, `tool_execution_end`,
 `before_provider_request`, `after_provider_response`, `provider_stream_event`,
 `model_select`, `thinking_level_change`, `mcp_servers_change`. As noted in
-§3.2 they are registered but not yet dispatched.
+§3.2, `resources_discover` is the one event delivered today (once at startup);
+the rest are registered but not dispatched.
 
 ## 4. Out of scope
 

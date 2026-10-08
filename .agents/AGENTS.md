@@ -51,10 +51,30 @@ sockets/DNS/TLS, per OS), `src/wire` (HTTP/SSE/JSON writer/URL), `src/core`
   is compared byte-for-byte with `tests/data/<name>.expected`.
 - `tests/run.sh` runs those, the CLI checks, and the shell/python integration
   suites. Update the matching `.expected` file with any output change.
-- Wire behavior uses `FWIR1` replays (`--record`/`--replay`, `tests/data/*.wire`).
+- Wire behavior uses `FWIR1` replays (`opcode fetch --record` captures;
+  `--replay` consumes on both fetch and the agent, `tests/data/*.wire`).
 - TUI checks run headlessly: `./build/opcode --headless WxH --script
   tests/scripts/tui.rsc` (verbs `type`, `key`, `prompt`, `wait`, `resize`,
   `print-screen`, `quit`).
+
+## Current behavior notes
+
+- `--verbose` raises the `base/log.s` gate to `LOG_DEBUG` and emits
+  request/response/tool diagnostics from `agent.s`; the default is silent.
+- `--list-sessions` prints this directory's sessions (newest first) and exits
+  (`session_list`).
+- An interactive TUI on a TTY prompts to trust a cwd that ships project
+  resources and saves the answer (`config_trust_ask`/`config_trust_save`);
+  `--approve` and `<config>/trust.jsonc` still work.
+- `TL_SEQUENTIAL` is enforced: a batch containing a sequential tool runs one job
+  at a time and waits for it before the next.
+- Provider adapters dispatch through one table (`prov_for_api`; falls back to
+  `openai`); both compaction constants are compile-time defaults
+  (`g_compact_reserve` 16384 in `src/core/compact.s`, `COMPACT_KEEP_TOKENS`
+  20000 in `src/core/agent.s`).
+- `--record` belongs to `opcode fetch`; the agent front ends take `--replay`.
+- `opcode update` checks
+  `https://api.github.com/repos/abird-ai/opcode/releases/latest`.
 
 ## Design docs
 

@@ -112,8 +112,10 @@ array of fixed-size items; both live in `opcode.inc`. Strings, UTF-8 decoding
 and the shared Unicode width table live in `str.s` and `uni.s`; the width table
 is the single source for display columns, used by the composer, the transcript
 and the cell grid. The JSON parser accepts JSONC (comments and trailing commas)
-with a chained arena that is reset per document. `log.s` handles fatal and
-diagnostic output, and `loop.s` is the poll/watch table (at most 96 entries)
+with a chained arena that is reset per document. `log.s` handles fatal output
+plus a level-gated `log_debug_*` diagnostic API (`log_set_level` and the
+`LOG_ERROR`/`LOG_INFO`/`LOG_DEBUG` scale; `--verbose` raises the gate to
+`LOG_DEBUG`), and `loop.s` is the poll/watch table (at most 96 entries)
 that drives every non-blocking path. `start.s` is the entry point:
 `os_init(rsp)` then `opcode_main`. The frozen function contract is
 `src/base/API.md`.
@@ -254,7 +256,10 @@ block (cwd, platform, UTC date). Context files are `AGENTS.override.md`,
 ancestor; `SYSTEM.md` replaces the preamble and `APPEND_SYSTEM.md` appends.
 Skills and prompt templates are discovered from the config dir and, when the
 directory is trusted, the project `.opcode/` tree. Project resources are gated
-on `--approve` or `<config>/trust.jsonc`.
+on `--approve`, an interactive trust prompt in an interactive TUI
+(`config_trust_ask`, saved by `config_trust_save`), or a `<config>/trust.jsonc`
+entry; a plugin can contribute extra skill/prompt/theme roots through the
+`resources_discover` event (`add_resource_root`).
 
 **Compaction.** Before every idle turn, `compact_maybe_run` estimates
 `last usage + chars/4` of trailing messages and, when the estimate exceeds
@@ -277,15 +282,20 @@ the `edit` tool. The design decisions the implementation follows are listed in
 ### 5.6 Tools (`src/tools/`)
 
 Tools are static `TL_*` descriptors with a name, description, embedded JSON
-schema, flags (`TL_READONLY`, `TL_SEQUENTIAL`, `TL_DESTRUCTIVE`) and an `exec`
+schema, flags (`TL_READONLY`, `TL_SEQUENTIAL`, `TL_DESTRUCTIVE`, plus
+`TL_PROMPT` on appended plugin descriptors) and an `exec`
 plus optional `finish`. `tool_validate` parses the tool's own `TL_params` schema
 and enforces its `required`/`properties` types; a new tool needs a correct
 schema, not a validator edit. `edit` and `write` share the `tool_write_atomic`
 helper (temp file + rename, symlink refusal). Each call becomes a `J_*` job: an
 in-process operation
 or a child process watched through a non-blocking output pipe. A batch starts
-every call as a job; results append in source order while jobs complete, and
-the loop kills a child that passes its absolute `J_deadline_ms`. Built-ins are
+every call as a job; a batch containing any `TL_SEQUENTIAL` tool starts one at a
+time and waits for it before the next, otherwise the jobs run concurrently;
+results append in source order while jobs complete, and
+the loop kills a child that passes its absolute `J_deadline_ms`. Plugin tools may
+append `TL_snippet`/`TL_guidelines` (`TL_PROMPT`) to feed the system prompt.
+Built-ins are
 `read` (numbered lines with `offset`/`limit` and head truncation), `bash`
 (`sh -lc command`, stdout+stderr captured, default 120 s timeout), `edit`
 (unique non-overlapping `oldText`/`newText`, BOM/CRLF preserved, atomic write,
@@ -325,19 +335,23 @@ is `src/tui/API.md`; the renderer and editor details are in
 config dir and project `.opcode/`, spawns each server, performs the
 `initialize`/`initialized`/`tools/list` handshake with a deadline, registers
 server tools in the tool registry, and runs `tools/call` through the same job
-path; shutdown closes stdin then sends `SIGTERM`/`SIGKILL` to the child's
+path; a `result.isError` maps to a tool error and shutdown closes stdin, sends
+`SIGTERM`, reaps with a bounded non-blocking grace, then `SIGKILL`s the child's
 process group. `ext/plugin.s` and `ext/host.s` implement the static C ABI from
 `include/opcode_plugin.h`: a plugin exports one `opcode_plugin_init` symbol, the
 build compiles each manifest entry with a unique init name and links it, and the
 host vtable exposes allocation, logging, tool and command registration, event
-registration, JSON helpers and session/status hooks. The ABI is append-only with
+registration, JSON helpers and session/status hooks. Registered plugin commands
+are listed in the slash menu and dispatched; `resources_discover` roots feed the
+skill/prompt/theme scanners. The ABI is append-only with
 `struct_size`/`abi_version` checks. Runtime loading is not available in a static
 `-nostdlib` binary. Details and current host limitations are in
 `.agents/docs/extensibility.md`.
 
 ### 5.9 App (`src/app/`)
 
-`main.s` dispatches subcommands and `--version`/`--help`; `cli.s` is the shared
+`main.s` dispatches subcommands, `--version`/`--help` and `--list-sessions`;
+`cli.s` is the shared
 flag parser, usage renderer and session resolver; `modes.s` implements the JSON
 and RPC front ends; `run.s` and `tui.s` drive print mode and the TUI;
 `onboard.s` is the first-run provider menu; `login.s`, `models.s`, `fetch.s` and
@@ -348,16 +362,20 @@ Modes: the TUI (the default), `-p`/`--print` (one prompt to stdout, exit 0/1),
 responses and events out, with the documented command set).
 
 Subcommands: `opcode login|logout [provider]`, `opcode models [--refresh]
-[--provider P]`, `opcode fetch URL`, `opcode update [--check] [--offline]`.
+[--provider P]`, `opcode fetch URL`, `opcode update [--check] [--offline]`
+(checks `https://api.github.com/repos/abird-ai/opcode/releases/latest`);
+`opcode --list-sessions` prints the cwd's sessions (newest first) and exits.
 
 Agent front-end flags: `--provider`, `--model`, `--api-key`, `--base-url`,
 `--system`, `--replay FILE`, `--max-tokens`, `--thinking`, `--offline`,
 `--continue`, `--resume`, `--session`, `--session-dir`, `--no-session`,
-`--template NAME [args...]`, `--approve`, `--verbose`. The TUI additionally
-accepts `--headless WxH`, `--headless-capture FILE`, `--script FILE`,
+`--template NAME [args...]`, `--approve`, `--verbose`. `--verbose` raises the
+log gate to `LOG_DEBUG` and emits request/response/tool diagnostics. The TUI
+additionally accepts `--headless WxH`, `--headless-capture FILE`, `--script FILE`,
 `--tui-mode`, and `--theme`; the modes front ends accept `--mode json|rpc` and
 `-p`/`--print`; `opcode fetch` accepts request/record flags such as `--method`,
-`--header`, `--data`, `--record FILE`, `--dump-wire` and `--insecure`.
+`--header`, `--data`, `--record FILE`, `--dump-wire` and `--insecure`; `--record`
+is `fetch`-only — the agent front ends take `--replay FILE` only.
 
 ## 6. Performance budget
 
@@ -461,7 +479,8 @@ MIT-licensed model metadata published by pi.
    with a loopback-only callback server and PKCE S256.
 4. **macOS:** arm64 only; Intel macOS is not supported.
 5. **Tool scheduling:** parallel tool execution is the default; `TL_SEQUENTIAL`
-   marks a tool that must serialize.
+   marks a tool that must serialize, and the batch driver enforces it (one job
+   at a time).
 6. **TLS:** vendored mbedTLS serves every target from the start; the `tls_*`
    contract keeps a future replacement (including a pure-assembly TLS 1.3
    client) a link-local swap.

@@ -18,11 +18,15 @@ Three renderers over the same state. The mode values are `scrollback=0`,
   editor's reverse-video cell is the visible caret. Every owned row is repainted
   under a full-line clear inside one `ESC[?7l`/`ESC[?7h` write. Finished whole
   transcript messages are committed at the region's top edge with newline mode
-  and flow up into real scrollback; a live block taller than the region shows its
-  tail. A resize clears the region with cursor-relative movement only, then
-  re-anchors and repaints; the SIGWINCH pipe and a size poll share one resize
-  path. Both dimensions are clamped to 4096 (the renderer's `GRID_MAX`) so an
-  oversized terminal or a script `resize` cannot overrun the region state.
+  and flow up into real scrollback; the commit is progressive — the finished
+  prefix (whole messages with no running tool card) is printed on each frame
+  while a run streams, not only when the agent goes idle, and `t_in_offset`
+  tracks the rows already printed so no row is written twice. A live block
+  taller than the region shows its tail. A resize clears the region with
+  cursor-relative movement only, then re-anchors and repaints; the SIGWINCH pipe
+  and a size poll share one resize path. Both dimensions are clamped to 4096
+  (the renderer's `GRID_MAX`) so an oversized terminal or a script `resize`
+  cannot overrun the region state.
 - **scrollback (`--tui-mode scrollback`)** — the append-only path: the
   terminal's normal scrollback is the transcript, finalized text is streamed to
   stdout once, and a live footer is redrawn by moving up over the previous frame.
@@ -44,7 +48,13 @@ is also called from `os_sig_cleanup` before fatal signals are re-raised
 `term_set_size` supplies the dimensions. `--headless-capture FILE` keeps the
 requested mode and routes fd-1 writer bytes to FILE, so a golden can assert the
 inline/fullscreen byte stream (banner, autowrap bracket, parked cursor, bands)
-instead of only the grid dump.
+instead of only the grid dump. Before `term_init`, `tui_banner()` prints one dim
+line above the live region into real scrollback: `opcode <version>`, then
+`tools: <name, name, ...>` when the core registry is non-empty, then
+`session: <id>` when a session is active. The whole body is run through
+`grid_sanitize_bytes`, so the version, tool names and session id cannot inject
+controls; the banner is suppressed for a plain `--headless` grid dump and
+emitted when a capture sink is active.
 
 ## 2. Renderer (`src/tui/render.s`)
 
@@ -173,23 +183,34 @@ The TUI installs `g_agent_ui_fn` and translates events:
 
 - `SE_TEXT` deltas append to the live assistant row; completed blocks are
   committed to the view buffer.
-- Thinking, tool calls, tool output (dim, indented, whitespace-trimmed) and
-  errors get their own styled rows/notes; tool output is plain text, not a
-  colored diff.
-- The status line is `opcode <provider>/<model> ready|working` on the bottom row;
-  there is no token/cost/context footer in this build.
+- Thinking and errors get their own styled rows/notes. Tool results render as
+  diff-coloured cards (`src/tui/card.s`), not plain text: the header is
+  `[<name>] <48-column arg preview>` with a right-aligned spinner/elapsed while
+  running or `ok`/`err <duration>ms` when finished, the body shows the tail of
+  the output (3 collapsed / 10 expanded lines) with a dim `... (+N lines)`
+  marker, and `edit` lines starting `+`/`-`/`@` take the diff add/del/hunk
+  styles. `Ctrl+O` toggles the last card collapsed/expanded.
+- The status line is a provider-segment footer (`src/tui/status.s`), not a fixed
+  string: LEFT renders `model` (`<provider>/<id>`), `think:<level>`, and
+  `tok:<input>/<output>`; RIGHT renders `ready`, or `<spinner> <elapsed>ms` while
+  busy. A `$cost` segment is supported by the provider but omitted because the
+  TUI has no pricing table, and there is no context-window footer in this build.
 - Key precedence per event: refresh the menu from the editor text; if the menu is
   open consume exactly Up/Down/Tab/Enter/Esc; then `Ctrl+C` (non-empty clears,
   empty quits within 1 s), `Ctrl+D` (empty quits), `Esc` (busy aborts, else
   clears), PageUp/PageDown scroll the transcript, and finally `editor_key`;
   `editor_key == 1` accepts/submits.
-- Submit: `editor_take` then dispatch the built-ins (`/quit /new /clear /help
-  /model /theme /thinking /compact`); otherwise append the user block,
-  `editor_history_append` and `agent_submit`.
+- Submit: `editor_take` then dispatch the built-ins (`/quit`, `/new`, `/clear`,
+  `/help`, `/model [id]`, `/theme [dark|light|<name>]`,
+  `/thinking [off|low|medium|high]`, `/compact`) then `/skill:<name> [args]`,
+  prompt-template names and plugin/extension commands; otherwise append the user
+  block, `editor_history_append` and `agent_submit`.
 - The slash-command menu (`src/tui/menu.s`) opens on a leading `/` word, filters
   by prefix, and lists the built-ins `clear help model new quit theme thinking
-  compact`; the selected row is reverse-video and the menu sits above the
-  composer in fullscreen / below it inline.
+  compact`, then prompt-template names, skill names as `skill:<name>` and
+  extension commands when `opcode_host_command_count` is non-zero. The selected
+  row is reverse-video; the menu sits above the composer in fullscreen and below
+  it inline (between the composer and the footer).
 - `Esc` aborts the current run and returns queued input to the editor; `Ctrl+C`
   clears the input and a second `Ctrl+C` quits. `/quit` exits and `/new` starts
   a fresh session.
@@ -198,10 +219,10 @@ The TUI installs `g_agent_ui_fn` and translates events:
 
 `--headless WxH --script FILE` runs the real TUI against the in-memory grid and
 prints it as text, which is how the golden TUI tests work. Script verbs (one per
-line, `#` comments): `type TEXT`, `key NAME` (`up`, `down`, `enter`, `esc`,
-`tab`, `backspace`, `ctrl-c`, …; there is no `alt-enter` name, so Alt+Enter is
-exercised by the editor unit test rather than the script runner), `prompt TEXT`
-(submit a message), `wait MS`, `resize W H`, `print-screen`, `quit`.
+line, `#` comments): `type TEXT`, `key NAME` (`up`, `down`, `enter`, `alt-enter`
+(inserts a newline), `esc`, `tab`, `backspace`, `ctrl-c`, `ctrl-o`, …),
+`prompt TEXT` (submit a message), `wait MS`, `resize W H`, `print-screen`,
+`quit`.
 `tests/scripts/tui.rsc` and `tests/data/tui.expected` are the reference example.
 
 ## 9. Performance rules

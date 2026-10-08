@@ -102,6 +102,11 @@ tool_err(job, msg)                     # writes an error result and completes
 tool_done(job)                         # marks JS_DONE (idempotent)
 truncate_head(sb, max_lines, max_bytes, path_hint cstr)
 ```
+`TL_flags` also carries `TL_PROMPT` (bit 8) on appended plugin descriptors, which
+set `TL_snippet`/`TL_guidelines` (fields after `TL_finish`; `TL_SIZE` is 72) and
+are read by `prompt_build`. `TL_SEQUENTIAL` is enforced by the batch driver: a
+batch containing any sequential tool starts exactly one job at a time and waits
+for it before the next.
 
 Job result text lives in `job->J_out` (an SB owned by the caller). `TL_exec`
 either completes synchronously (`tool_done`) or launches a child and returns;
@@ -132,6 +137,12 @@ agent_config:  globals set by the app
 agent_run(prompt cstr) -> exit code    # print mode: run to completion, stream text
 agent_abort()
 ```
+`--verbose` (`g_agent_verbose`) makes `agent_init` raise the `base/log.s` gate to
+`LOG_DEBUG`; the `agent_dbg_request`/`agent_dbg_response`/`agent_dbg_tool_*`
+helpers then emit `> POST <url> (<n> bytes)`, `< <status> (<n> rx bytes)` and
+`tool <name> ...` lines through `log_debug_*` (`src/base/API.md`). Top-level
+`--list-sessions` (`src/app/main.s`) calls `session_list(0, 0)` after
+`config_load` and exits.
 `agent_run` drives the state machine with the watch table + loop_poll, streams
 assistant text to stdout, executes tools, and returns 0 on a completed answer,
 1 on error. `agent_abort` sets a cancellation request; the next
@@ -194,6 +205,8 @@ session_append_custom(s, custom_type cstr, data_json cstr) -> 0
 session_close(s)
 session_find_latest(dir cstr|0, cwd cstr) -> path cstr | 0   # newest file in the cwd dir
 session_find_id(dir cstr|0, id cstr) -> path cstr | 0        # file whose name ends _<id>.jsonl
+session_list(dir cstr|0, cwd cstr|0) -> count | 0             # print "<id> <ts_ms> <path>"
+                                                             # newest first to stdout
 ```
 `session_new` creates the directories, writes the header, and returns a Session with
 the file open O_APPEND. `session_append_*` write one line each and fsync on message
@@ -209,9 +222,16 @@ config_api_key(provider cstr) -> cstr|0
 config_session_dir() -> cstr|0
 config_default_theme() -> cstr|0   # "theme" name; CLI --theme wins
 config_trusted(cwd cstr) -> 1|0    # g_config_approve, else trust.jsonc entry
-config_trust_save(cwd cstr) -> 0
+config_trust_save(cwd cstr) -> 0   # append cwd to <config>/trust.jsonc
+config_trust_ask(cwd cstr) -> 1|0  # interactive TUI prompt, once per process:
+                                   # only with g_config_interactive + a TTY +
+                                   # an untrusted cwd shipping project resources;
+                                   # saves on y/Y, anything else (incl. EOF) is no
 g_config_approve: .quad            # set by --approve before config_load
+g_config_interactive: .quad        # app sets 1 for an interactive TTY TUI
 ```
+`config_load()` calls `config_trust_ask(cwd)` before `config_trusted(cwd)`, so a
+`y` answer takes effect for that same load.
 Paths: `$XDG_CONFIG_HOME/opcode/config.jsonc` (default `~/.config/opcode`), project
 `<cwd>/.opcode/config.jsonc`; trust file `<config>/trust.jsonc` with
 `{"trusted":["/abs/cwd", ...]}`. Unknown keys are ignored.
@@ -261,10 +281,14 @@ prompt_template_expand(name cstr, args cstr, out SB*) -> 0|-ENOENT
 `prompt_build` gains, in order after `rules`:
 `addendum` (APPEND_SYSTEM.md), `project_context` (context files found in the config
 dir and every cwd ancestor, wrapped in `<project_instructions path="...">`),
-`skills` (`<available_skills>` from `<config>/skills` and `<cwd>/.opcode/skills`),
-then `cwd`. Context file names checked per directory:
+`skills` (`<available_skills>` from `<config>/skills`, `<cwd>/.opcode/skills`
+and any `resources_discover` skill root), then `cwd`. A plugin descriptor with
+`TL_PROMPT` also supplies its `TL_snippet` as the `# Tools` line and its
+`TL_guidelines` as extra `# Rules` bullets; prompt templates additionally scan
+`resources_discover` prompt roots. Context file names checked per directory:
 `AGENTS.override.md`, `AGENTS.md`, `OPCODE.md`, `CLAUDE.md`.
-`<config>/SYSTEM.md` replaces the preamble; project variants apply only when trusted.
+`<config>/SYSTEM.md` replaces the preamble; project variants apply only when
+trusted (`--approve`, the interactive prompt, or `trust.jsonc`).
 
 ## src/core/agent.s
 

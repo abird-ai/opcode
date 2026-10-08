@@ -100,9 +100,11 @@ Behavior:
 - SSE events are decoded by the provider into typed `SE_*` events and appended
   to the live assistant message; the UI renders on its own tick, not per delta.
 - Tool calls run as jobs (§5). `tool_execution_end` ordering and source-order
-  result appends match the job model. `TL_SEQUENTIAL` is advisory: the built-in
-  read/ls/find/grep tools are in-process and complete synchronously, so a batch
-  is effectively serialized; child tools (bash) are not marked sequential.
+  result appends match the job model. `TL_SEQUENTIAL` is enforced by the batch
+  driver: when any call in a batch targets a sequential tool (the in-process
+  `read`/`ls`/`find`/`grep`), the batch starts one job at a time and waits for it
+  before the next; other batches (`bash`, `edit`, `write`) start every job
+  concurrently.
 - `error` and `aborted` stops are hard stops: remaining tool calls do not run
   and the run ends with an error assistant message.
 - Abort closes the transport, kills child processes, appends an aborted
@@ -199,11 +201,13 @@ Tools are static descriptors in a `VEC`:
 STRUCT
 F TL_name, 8      F TL_label, 8     F TL_desc, 8
 F TL_params, 8    # embedded JSON schema (cstr)
-F TL_flags, 4     # TL_READONLY, TL_SEQUENTIAL, TL_DESTRUCTIVE
+F TL_flags, 4     # TL_READONLY, TL_SEQUENTIAL, TL_DESTRUCTIVE, TL_PROMPT
 F TL_pad, 4
 F TL_exec, 8      # (Job*) -> 0|-errno
 F TL_finish, 8    # (Job*) -> 0; at child EOF (may be null)
-ENDSTRUCT TL_SIZE
+F TL_snippet, 8   # plugin `# Tools` line, TL_PROMPT only (0 = generic name)
+F TL_guidelines, 8# plugin `# Rules` bullets, TL_PROMPT only (0 = none)
+ENDSTRUCT TL_SIZE # 72
 
 STRUCT
 F J_tool, 8       F J_call_id, 8   F J_args, 8    F J_pid, 8
@@ -271,19 +275,23 @@ provider, and only JSON placement and a few provider-scoped parameters differ
 
 | # | Block | Purpose | Where (`src/core/prompt.s`) |
 |---|---|---|---|
-| 1 | preamble | identity and operating behaviour | `<config>/SYSTEM.md`, else the built-in text (`:88-90`, `:1824-1835`) |
-| 2 | `# Tools` | one line per active tool, `name: description` | the active `TL_desc` set (`:1836-1880`) |
-| 3 | `# Rules` | tool and conduct guidelines | the `.LS_rules` literal (`:94-99`, `:1881-1885`) |
-| 4 | addendum | caller-supplied extra instructions | `<config>/APPEND_SYSTEM.md` and, when trusted, `<cwd>/.opcode/APPEND_SYSTEM.md`, wrapped in `<addendum>` (`:1886-1910`) |
-| 5 | project_context | repository instructions | context files from the config dir and every cwd ancestor, wrapped in `<project_instructions path=…>` (`:1911-1926`) |
-| 6 | `<available_skills>` | skill index plus one instruction to read a matching skill | `<config>/skills/**/SKILL.md`, `<cwd>/.opcode/skills/**/SKILL.md` (`:1927-1957`) |
-| 7 | `# Environment` | `- cwd:`, `- platform:` and `- date:` (UTC) facts | `prompt_build`'s tail, kept last because these are the turn-varying facts (ADR-8/T3, ADR-12) (`:1958-2003`) |
+| 1 | preamble | identity and operating behaviour | `<config>/SYSTEM.md`, else the built-in text (`:97-99`, `:1929-1942`) |
+| 2 | `# Tools` | one line per active tool, `name: description` | the active `TL_desc` set, or a plugin `TL_snippet` (`:1944-1999`) |
+| 3 | `# Rules` | tool and conduct guidelines plus plugin `TL_guidelines` bullets | the `.LS_rules` literal (`:104-108`, `:2000-2027`) |
+| 4 | addendum | caller-supplied extra instructions | `<config>/APPEND_SYSTEM.md` and, when trusted, `<cwd>/.opcode/APPEND_SYSTEM.md`, wrapped in `<addendum>` (`:2028-2053`) |
+| 5 | project_context | repository instructions | context files from the config dir and every cwd ancestor, wrapped in `<project_instructions path=…>` (`:2054-2070`) |
+| 6 | `<available_skills>` | skill index plus one instruction to read a matching skill | `<config>/skills/**/SKILL.md`, `<cwd>/.opcode/skills/**/SKILL.md` and `resources_discover` skill roots (`:2071-2103`) |
+| 7 | `# Environment` | `- cwd:`, `- platform:` and `- date:` (UTC) facts | `prompt_build`'s tail, kept last because these are the turn-varying facts (ADR-8/T3, ADR-12) (`:2104-2148`) |
 
+The `# Tools` line and `# Rules` bullets also incorporate a plugin's
+`prompt_snippet`/`prompt_guidelines` when its descriptor carries `TL_PROMPT`
+(§5.1), and prompt-template discovery scans plugin `resources_discover` roots.
 The output always ends with `\n`.
 
 - Context file names: `AGENTS.override.md`, `AGENTS.md`, `OPCODE.md`,
   `CLAUDE.md`. Project context and project skills load only when the directory
-  is trusted (`--approve`, or the path saved in `<config>/trust.jsonc`).
+  is trusted (`--approve`, an interactive TUI prompt saved with
+  `config_trust_save`, or the path saved in `<config>/trust.jsonc`).
 - Skills: `<config>/skills/**/SKILL.md` and `<cwd>/.opcode/skills/**/SKILL.md`;
   frontmatter provides `name`/`description`; the body is loaded when the model
   reads the file.
@@ -334,7 +342,7 @@ Three per-provider differences are deliberate, not accidents:
   cap on local models.
 - **`platform` comes from `os_platform()` in the platform layer**, declared in
   `src/plat/plat.inc:28` and emitted in the `# Environment` block
-  (`src/core/prompt.s:1958-2003`). The Linux definition is **weak**
+  (`src/core/prompt.s:2104-2148`). The Linux definition is **weak**
   (`src/plat/linux/sys.s:107-110`) while the macOS one is **strong**
   (`src/plat/mac/rt.s:209-214`): the arm64 build translates and links the Linux
   Layer 0, so on Darwin the weak default lowers to `.weak_definition` and the
@@ -375,7 +383,7 @@ need tz data, a forbidden new dependency. It is derived from the existing
 
 Each built-in tool owns its description and JSON schema in `src/tools/<name>.s`
 (the `TL_desc` and `TL_params` fields), and the `# Tools` block is generated
-from those same strings (`src/core/prompt.s:1836-1880`). The description is the
+from those same strings (`src/core/prompt.s:1944-1999`). The description is the
 single source for what the model is told a tool does.
 
 A description may only state behaviour the implementation actually has (ADR-9).
@@ -389,10 +397,10 @@ left-to-right into a result buffer (`src/tools/edit.s:534-581`).
 ### 7.5 Testing and the platform seam
 
 `prompt_build` consults two test seams, both declared in `src/core/prompt.s`:
-`g_prompt_platform` (`:53-59`), which when non-zero supplies the platform
-string instead of calling `os_platform()` (`:1968-1971`), and `g_prompt_date`
-(`:61-67`), which when non-zero supplies the date string instead of deriving it
-from `os_now_ns(0)` (`:1976-1999`). Production leaves both zero, so one golden
+`g_prompt_platform` (`:64-68`), which when non-zero supplies the platform
+string instead of calling `os_platform()` (`:2114-2116`), and `g_prompt_date`
+(`:72-76`), which when non-zero supplies the date string instead of deriving it
+from `os_now_ns(0)` (`:2126-2140`). Production leaves both zero, so one golden
 fixture serves every target and every day.
 
 Composition is covered by tests:
@@ -450,7 +458,9 @@ header `{"type":"session","schema_version":1,...}`, then `message`,
 enums, timestamps are Unix milliseconds, `id`/`parent_id` form a linear chain.
 Appends are fsynced on message lines. `--continue` / `--resume` open the newest
 session for the cwd; `--session PATH|ID` opens a specific one; `--no-session`
-disables persistence. On load, a missing `schema_version` is treated as
+disables persistence; `--list-sessions` prints `<id> <timestamp_ms> <path>` for
+the cwd's sessions, newest first (`session_list`). On load, a missing
+`schema_version` is treated as
 version 1; a value greater than the current 1 refuses the load with the
 version pair and "written by a newer opcode", and older/equal values load
 unchanged. The full schema is documented in `src/core/API.md`.
@@ -465,7 +475,8 @@ blocking summarization request on the streaming wire (every adapter sends
 summary replaces the older transcript prefix, keeping the most recent
 `COMPACT_KEEP_TOKENS` (default **20000**) tokens of tail, and a `compaction`
 custom entry is recorded. Both constants are compile-time defaults
-(`g_compact_reserve` and `COMPACT_KEEP_TOKENS` in `agent.s`).
+(`g_compact_reserve` in `src/core/compact.s` and `COMPACT_KEEP_TOKENS` in
+`src/core/agent.s`).
 
 ## 10. Modes, commands and flags
 
@@ -477,7 +488,8 @@ custom entry is recorded. Both constants are compile-time defaults
 | `--mode rpc` | JSONL commands in / responses + events out; commands `prompt`, `abort`, `quit` |
 
 Subcommands: `opcode login|logout [provider]`, `opcode models [--refresh]
-[--provider P]`, `opcode fetch URL`, `opcode update [--check] [--offline]`.
+[--provider P]`, `opcode fetch URL`, `opcode update [--check] [--offline]`
+(checks `https://api.github.com/repos/abird-ai/opcode/releases/latest`).
 
 The five TLS/HTTP request paths share `src/wire/http_client.s`: fetch,
 update, discover, the OAuth token exchange and the agent's blocking
@@ -494,10 +506,14 @@ session resolver are shared in `src/app/cli.s`): `--provider`, `--model`,
 `--api-key`, `--base-url`, `--system`, `--replay FILE`, `--max-tokens`,
 `--offline`, `--continue`, `--resume`, `--session`, `--session-dir`,
 `--no-session`, `--template NAME [args...]`, `--approve`, `--verbose`.
-The TUI additionally accepts `--headless WxH`, `--script FILE` and
-`--tui-mode inline|fullscreen`; the modes front ends accept `--mode json|rpc`
-and `-p`/`--print`. `--version`/`--help` are handled by top-level dispatch.
+`--verbose` raises the log gate to `LOG_DEBUG` and emits request/response/tool
+diagnostics from `agent.s`. The TUI additionally accepts `--headless WxH`,
+`--script FILE`, `--tui-mode inline|fullscreen` and `--headless-capture FILE`;
+the modes front ends accept `--mode json|rpc`
+and `-p`/`--print`. `--version`/`--help` and `--list-sessions` (list the cwd's
+sessions newest first, then exit) are handled by top-level dispatch.
 `opcode fetch` additionally takes `--method`, `--header`,
-`--data`, `--record FILE`, `--dump-wire` and `--insecure`;
-`--record`/`--replay` use the `FWIR1` format documented in
+`--data`, `--record FILE`, `--dump-wire` and `--insecure`; `--record` is
+`fetch`-only (the agent front ends take `--replay FILE` only) and both use the
+`FWIR1` format documented in
 `.agents/docs/platform.md` §2.2.
