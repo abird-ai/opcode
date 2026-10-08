@@ -1,73 +1,81 @@
 # opcode
 
-An opcode is a single machine instruction — the atom a processor executes. This
-project is the same idea one layer up: a coding agent built from the smallest
-possible primitives, following its instructions to the letter.
+A minimal, extensible coding agent written in **hand-written x86-64 assembly** —
+static, no libc, Linux-first, with a linux-aarch64 port, a macOS arm64 port and a
+Windows x86-64 port.
 
-> **Note** — opcode is a *research* project, not production software. It exists
-> to push an extreme idea as far as it can go: a real coding agent in
-> hand-written assembly, static and libc-free. If you are looking for production
-> code, use **[agentc](https://github.com/abird-ai/agentc)** instead.
+> **Research project.** `opcode` is a *research* project, not production
+> software. It exists to push one extreme idea as far as it will go: a real
+> coding agent in hand-written assembly, statically linked and libc-free. If you
+> want a coding agent for real work, use
+> **[agentc](https://github.com/abird-ai/agentc)** — the production sibling, in
+> freestanding C23, with the same feature surface and a supported release. The
+> two share a design; `opcode` is the far end of the experiment.
 
-A minimal, extensible coding agent written in hand-written x86-64 assembly —
-static, no libc, Linux-first, with a linux-aarch64 port (cross-built and
-executed under `qemu-aarch64`), a Windows x86-64 port (PE32+, `-nostdlib`,
-executed under Wine on Linux, not yet run on real Windows) and a macOS arm64
-port (cross-validated on Linux, not yet run on Apple hardware).
+- **~0.2 ms** to launch, **~0.5 MB** resident in the TUI, **~706 KiB** static
+  binary — no runtime, no interpreter, no GC, no dynamic linker.
+- **One source tree, four live targets** (Linux x86-64/aarch64, macOS arm64,
+  Windows x86-64) plus a riscv64 target gated closed until its port lands.
+- **Direct syscalls and in-tree networking** — sockets, DNS and TLS are
+  implemented in the tree; TLS is vendored freestanding mbedTLS.
+- **A real TUI, providers, tools, sessions and a stable C ABI** — the feature
+  surface matches `agentc`'s, reimplemented from scratch in assembly.
 
-## Why
+## Footprint
 
-Figures are approximate and measured on the **reference Linux x86-64 build**
-(stripped release).
+Measured on one Linux x86-64 machine, `make release` (stripped), the same
+method for both. `opcode` and `agentc` are the two implementations of the same
+design; the external agents are `agentc`'s published figures, shown for scale.
 
-| | |
-|---|---|
-| startup | **~0.15 ms** per invocation, including fork/exec |
-| binary | **~640 KB** static, stripped release (vendored mbedTLS + CA bundle included) |
-| runtime | none — no libc, no dynamic linker, no GC, no interpreter |
-| I/O | direct Linux syscalls; sockets, DNS and TLS are implemented in-tree |
-| TLS | vendored freestanding mbedTLS 3.6.2 (no OpenSSL, no `dlopen`) |
-| concurrency | a single poll/watch event loop; no threads on the hot path |
+| agent | language | on-disk (stripped) | cold start | idle TUI RSS |
+|---|---|---:|---:|---:|
+| **opcode** | hand-written x86-64 assembly | **706 KiB** | **~0.2 ms** | **~0.5 MB** |
+| agentc | freestanding C23 | 925 KiB | ~0.2 ms | ~0.6 MB |
+| codex 0.161.0 | native (Rust) | 279 MiB | ~9 ms | ~25 MB |
+| Claude Code 2.1.293 | single-file binary | 241 MiB | ~9 ms | ~39 MB |
+| pi 0.99.2 | Node bundle + Node 24 | 17.5 MiB + runtime | ~249 ms | ~113 MB |
 
-## Install & build
+- **Cold start** is `--version` (process start to exit, median of 200 runs).
+- **Idle TUI RSS** is `VmHWM` sampled from `/proc/<pid>/status` while the TUI
+  sits at its first screen in a pty.
+- **on-disk** is the stripped release binary; `opcode` and `agentc` are built
+  here, the other three are `agentc`'s README figures (vendor Linux releases).
+- The gap is the runtime. `opcode` maps ~0.7 MB of its own text and holds a few
+  hundred KB of heap; the others carry a language runtime and an interpreter.
+
+## Build and test
 
 Linux x86-64 is the reference. The toolchain is GNU `as` and `ld`, `clang`
 (vendored freestanding TLS, C plugins, and the arm64 cross-assembler/compiler)
 and `python3` (generated assets/catalog/plugins).
 
+```sh
+make                 # build the debug binary build/opcode
+make release         # relink build/opcode stripped
+make test            # build the unit-test binaries
+make check           # build everything and run the full suite (tests/run.sh)
+make clean           # remove build/
+nix build            # package with Nix (x86_64-linux, aarch64-linux)
+nix develop          # development shell with the same toolchain plus cross binutils
+```
+
+`make check` runs the golden unit binaries, the CLI checks and the shell/python
+integration suites; a clean tree ends `TESTS <n> passed, 0 failed` (run it for
+the current count).
+
+Cross targets (the toolchain must be on `PATH` or reachable through `nix develop`):
+
 | Command | Result |
 |---|---|
-| `make` | build the debug binary `build/opcode` |
-| `make release` | relink `build/opcode` stripped |
-| `make test` | build the unit-test binaries |
-| `make check` | build everything and run the full suite (`tests/run.sh`) |
 | `make TARGET=linux-aarch64` | cross-build the static, no-libc AArch64 ELF `build/opcode-linux-aarch64` |
-| `make test-qemu` | build the AArch64 unit binaries and run the full suite against the ELF under `qemu-aarch64` (full suite passes, 0 skipped; run `make check` for the current count) |
-| `nix build .#linux-aarch64` | package the AArch64 static ELF (cross-built on `x86_64-linux`) |
-| `nix build .#checks.x86_64-linux.linux-aarch64-qemu` | flake check: cross-build plus the sandbox-safe subset under `qemu-aarch64` |
-| `nix build` | package with Nix for `x86_64-linux` / `aarch64-linux` |
-| `nix build .#release` | stripped native release package (`RELEASE=1`) |
-| `nix run .#targets` | print the cross-build target table (what CI can build) |
-| `nix develop` | development shell with the same toolchain plus cross binutils |
-
-`make test-qemu` verifies linux-aarch64 by cross-building the AArch64 ELF and
-executing the whole suite under `qemu-aarch64`; it re-execs through `nix develop`
-when the cross toolchain is not already on `PATH`. That execution is the Linux
-platform layer, not the Darwin one.
-
-macOS arm64 (implemented; not yet run on Apple hardware — see
-[`.agents/docs/ports.md`](.agents/docs/ports.md)):
-
-| Command | Result |
-|---|---|
+| `make test-qemu` | build the AArch64 unit binaries and run the full suite against the ELF under `qemu-aarch64` (0 skipped) |
 | `make arm64-translate` | translate + assemble every source for `arm64-apple-macos11` (the syntax gate; also compiles the arm64 C) |
-| `make darwin-arm64` | build the mac object set and link `build/opcode-darwin-arm64` on a host with a Mach-O linker; on Linux it assembles the 133 objects and skips the link with a message |
-| `make darwin-arm64-smoke` | same for the Layer-0 smoke binary `build/smoke-darwin-arm64` |
-| `make darwin-arm64-test` | build the unit-test binaries as Mach-O arm64 |
-| `make darwin-arm64-cross ARM64_LD="…/zig cc"` | Linux cross-link of the app + smoke with zig (`-target aarch64-macos.11.0`); smoke check only |
-| `nix build .#darwin-arm64-cross` | the cross build of the app, smoke and the unit binaries plus `tools/check-macho.sh` (static Mach-O validation) |
+| `make darwin-arm64` | build the mac object set and link `build/opcode-darwin-arm64` on a host with a Mach-O linker |
+| `make darwin-arm64-cross ARM64_LD="…/zig cc"` | Linux cross-link of the app + smoke with zig (smoke check only) |
+| `nix build .#darwin-arm64-cross` | cross build + `tools/check-macho.sh` (static Mach-O validation) |
+| `make TARGET=windows-x86_64` / `make test-wine` | PE32+ build and the Wine execution lane |
 
-## Releases
+### Releases
 
 Tagged pushes are built by `.github/workflows/release.yml`:
 
@@ -75,84 +83,65 @@ Tagged pushes are built by `.github/workflows/release.yml`:
 git tag v0.2.0 && git push origin v0.2.0
 ```
 
-The Linux `build` job verifies `linux-aarch64` under `qemu-aarch64`, then
-cross-builds every Linux target whose port layer is present and skips the rest
-with a `::notice::`; the `darwin-arm64` job builds `opcode-darwin-arm64` natively
-on `macos-14`. Each artifact is named
-`opcode-<os>-<arch>[.exe]`, plus a `SHA256SUMS` file; all of them are attached to
-the GitHub release for the tag (`gh release upload`). Tags containing `-` (e.g.
-`v0.2.0-rc1`) are marked prerelease.
+Each artifact is named `opcode-<os>-<arch>[.exe]`, plus a `SHA256SUMS` file; all
+of them are attached to the GitHub release for the tag. Tags containing `-` are
+marked prerelease.
 
-`darwin-arm64` is defined and validated up to the point a Linux host allows:
+## Platforms
 
-- **Cross-checked on Linux**: `nix build .#darwin-arm64-cross` links the app, the
-  Layer-0 smoke binary and the unit-test binaries as Mach-O arm64 with zig,
-  imports only `/usr/lib/libSystem.B.dylib`, and passes `tools/check-macho.sh`.
-  This is a smoke check, never the release artifact.
-- **macOS CI lane (defined, not executed here)**: `ci.yml` has a `macos` job on
-  `macos-14` (`nix build .#darwin-arm64`, `make darwin-arm64-smoke`, then
-  `tests/run.sh`), and `release.yml` has a `darwin-arm64` job on `macos-14` that
-  builds and tests the binary and publishes it. The native run is expected to
-  pass the full suite with no skips (run `make check` for the current count).
-
-Neither workflow has been executed from this environment (there is no git
-remote and no macOS runner here), and the binary has not been run on Apple
-hardware. `tools/targets.sh` (or `nix run .#targets`) shows which gates are open,
-and `nix build .#<target>` builds one locally. See
-[`.agents/docs/ports.md`](.agents/docs/ports.md) for how to flip a target on.
-
-## Platform support: what is tested, and where help is wanted
-
-| target | builds | test suite | tested by hand |
+| target | builds | CI | driven by hand |
 |---|---|---|---|
-| linux-x86_64 | yes | full suite (`make check`; run it for the current count) | yes |
-| linux-aarch64 | yes | the same suite under `qemu-aarch64` (`make test-qemu`, full suite passes), and the full suite inside the Nix sandbox check `nix build .#checks.x86_64-linux.linux-aarch64-qemu` | no (qemu only, never on AArch64 hardware) |
-| darwin-arm64 | yes (translated to Mach-O arm64; link checked by `tools/check-macho.sh`) | unit binaries cross-built, never executed; the `macos-14` lane runs `tests/run.sh` but has not run yet | no |
-| linux-riscv64 | no — no port sources yet | — | no |
-| windows-x86_64 | yes (PE32+, mingw-w64 cross toolchain, `-nostdlib`) | the unit binaries + CLI + integration subset under Wine (`make test-wine`, the suite subset under Wine, 15 documented divergences) | no (Wine only; never on real Windows) |
-| darwin-x86_64 | no — not an Opcode port; the Darwin work is AArch64-only | — | no |
+| Linux x86-64 | yes (reference) | native `make check` | yes |
+| Linux aarch64 | yes (cross) | golden suite under `qemu-aarch64` | no (qemu only) |
+| macOS arm64 | yes (translated Mach-O) | `macos-14` lane defined, not run here | no |
+| Windows x86-64 | yes (PE32+, `-nostdlib`) | Wine lane (suite subset) | no (Wine only) |
+| Linux riscv64 | no — no port sources yet | gated closed | no |
+| macOS x86-64 | no — the Darwin work is AArch64-only | — | no |
 
-*Tested by hand* means a person has run that binary for a real session on that
-platform, which is not the same as a suite passing in CI. Linux x86-64 is
-exercised end to end. linux-aarch64 passes the whole suite under `qemu-aarch64`
-but has never run on silicon. macOS arm64 assembles and cross-links to a valid
-Mach-O on Linux (`nix build .#darwin-arm64-cross`, `tools/check-macho.sh`); the
-same sources run under `qemu-aarch64` through the linux-aarch64 target, but the
-Darwin platform layer itself (`src/plat/mac`, `src/net/mac`) has never run — it
-needs a `macos-14` runner or a Mac. Windows x86-64 builds and runs under Wine
-(the CI lane is defined; the local lane is green), but it has never run on real
-Windows — see [`.agents/docs/ports.md`](.agents/docs/ports.md) §3.7 for what
-only a Windows machine can settle. riscv64 has no port sources;
-`tools/targets.sh` keeps that target gated closed and it is not built.
+*Driven by hand* means a person ran a real session on that platform, not that a
+suite passed. Linux x86-64 is exercised end to end. Everything else is
+cross-built and validated as far as a Linux host allows: Linux aarch64 runs the
+whole suite under `qemu-aarch64` but has never run on silicon; macOS arm64
+assembles and cross-links to a valid Mach-O (`tools/check-macho.sh`) but the
+Darwin platform layer has never run; Windows builds and runs under Wine but has
+never run on real Windows. The riscv64 target has no port sources and is gated
+closed.
 
-If you have a Mac or AArch64 Linux hardware, testing is genuinely useful:
+### Help wanted: real hardware
 
-- on macOS arm64, `tests/run.sh` builds the Mach-O app and the arm64 unit
-  binaries and runs the full suite natively; the expected result is a full-suite
-  pass (run `make check` for the current count). A real session (`./build/opcode --version`, then
-  a prompt that calls a tool) is the most useful report — the TUI is where
-  platform differences bite first;
-- on AArch64 Linux, `make linux-aarch64 test-aarch64` builds the unit binaries;
-  run them directly (`build/a64/tests/*` against `tests/data/*.expected`) since
-  `make test-qemu` always goes through the emulator;
-- report the exact command, its full output and `uname -a` in an issue. See
-  [`.agents/docs/ports.md`](.agents/docs/ports.md) for the port checklist and
-  what a port must provide.
+If you have a Mac, an AArch64 Linux box, or a Windows machine, testing is
+genuinely useful — platform differences bite first at resize, unicode width,
+Ctrl-C, paste, and the inline bottom region.
+
+- **macOS arm64** — `make && make check`, then a real session (`./build/opcode
+  --version`, then a prompt that calls a tool). Mention Apple silicon or Intel.
+- **AArch64 Linux** — `make linux-aarch64 test-aarch64`, then run the unit
+  binaries directly (`build/a64/tests/*` against `tests/data/*.expected`), since
+  `make test-qemu` always goes through the emulator.
+- **Windows** — `opcode --version`, `opcode models`, then a prompt that calls a
+  tool; most useful from a machine that only has Windows PowerShell 5.1.
+- Report the exact command, its full output and `uname -a` in an issue. See
+  [`.agents/docs/ports.md`](.agents/docs/ports.md) for the port checklist.
+
+**Toolchain:** GNU `as` + `ld` for the assembly, `clang` for the vendored
+freestanding TLS and C plugins, `python3` for generated assets, and Nix for
+reproducible packaging. A static no-libc binary cannot `dlopen`, so extensions
+link in statically (see [Extensions](#mcp-and-extensions)).
 
 ## Quick start
 
 ```sh
-./build/opcode                          # interactive TUI (inline scrollback by default)
-./build/opcode --list-sessions          # list this directory's sessions, newest first, then exit
-./build/opcode --verbose                # same TUI, with request/response/tool diagnostics on stderr
-./build/opcode --tui-mode fullscreen    # full-screen renderer instead
-./build/opcode -p "explain this project"   # one-shot: run and print the answer
-./build/opcode --mode json -p "hi"      # machine-readable JSONL events
-./build/opcode --mode rpc               # JSONL commands in, events out
-./build/opcode login anthropic          # OAuth subscription login (login|logout)
-./build/opcode models --refresh         # refresh and list available models
-./build/opcode fetch https://example.com/  # minimal HTTP(S) client
-./build/opcode update                   # check for a newer release
+./build/opcode                            # interactive TUI (inline region by default)
+./build/opcode --tui-mode fullscreen      # alternate-screen renderer
+./build/opcode -p "explain this project"  # one-shot: run and print the answer
+./build/opcode --mode json -p "hi"        # machine-readable JSONL events
+./build/opcode --mode rpc                 # JSONL commands in, events out
+./build/opcode login anthropic            # OAuth subscription login (login|logout)
+./build/opcode models --refresh           # refresh and list available models
+./build/opcode --list-sessions            # list this directory's sessions, then exit
+./build/opcode --verbose                  # same TUI, with request/tool diagnostics on stderr
+./build/opcode fetch https://example.com/ # minimal HTTP(S) client
+./build/opcode update                     # check for a newer release
 ```
 
 With no provider configured the first run shows an onboarding menu. Built-in
@@ -160,8 +149,68 @@ providers: **anthropic** (`claude-*`), **openai** (`gpt-*`), **google**
 (`gemini-*`, served through Google's OpenAI-compatible endpoint), **ollama**
 (local, no key) and **ollama-cloud**. OpenAI is the default provider. Cloud
 providers are authenticated with `opcode login <provider>` or an API key (flag,
-environment or `auth.jsonc`); Google uses `GEMINI_API_KEY`/`GOOGLE_API_KEY` or
-`--api-key`.
+environment variable or `auth.jsonc`); Google uses
+`GEMINI_API_KEY`/`GOOGLE_API_KEY` or `--api-key`.
+
+## Providers, models and first-run setup
+
+- **Built in:** `anthropic`, `openai`, `google`, `ollama` (local, no key),
+  `ollama-cloud`. OpenAI-compatible endpoints are reachable through
+  `providers.<id>.base_url`.
+- **Discovery:** `opcode models --refresh` probes the configured endpoint (and
+  Ollama's `/api/tags`) and writes `<config>/models.jsonc`; credentials live in
+  `<config>/auth.jsonc` (0600).
+- **Auth precedence:** `--api-key` › stored OAuth credential › `auth.jsonc`
+  api_key › provider environment variable › config `api_keys`. A stored OAuth
+  login owns its provider: an expired token is an error, never a silent fallback
+  to an ambient key.
+- **OAuth subscription logins:** `opcode login [anthropic|openai]` uses an
+  authorization-code + PKCE S256 flow with a loopback-only callback and an
+  atomic 0600 token store; `opcode logout [provider]` clears it.
+
+## MCP and extensions
+
+Four ways in, cheapest first:
+
+- **MCP servers** — stdio JSON-RPC configured in `mcp.jsonc` (config dir and
+  trusted project `.opcode/`); server tools are exposed as
+  `mcp__<server>__<tool>`. Transport is stdio and only `tools/*` is read; a
+  server `isError` maps to a tool error, and shutdown is `SIGTERM` → bounded reap
+  → `SIGKILL`.
+- **Static C plugins** — the stable C ABI lives in
+  [`include/opcode_plugin.h`](include/opcode_plugin.h). Plugins are listed in
+  `plugins/manifest.json`; `tools/gen-plugins.py` and the Makefile link them with
+  a per-plugin `opcode_plugin_init_<name>` symbol. A plugin can register tools
+  (with prompt snippets/guidelines), commands, status keys and event handlers,
+  and call back into the host vtable. Loading is **static** — a static, no-libc
+  binary cannot `dlopen`.
+- **Declarative resources** — context files, skills, prompt templates, named
+  themes, and project trust. Plugins can contribute skill/prompt/theme roots
+  through `resources_discover`.
+- **Machine modes** — `--mode json` (JSONL events) and `--mode rpc` for editors
+  and harnesses.
+
+Current host limits (the plugin event bus records handlers but only
+`resources_discover` is delivered; `set_status`/`set_title` are inert; no async
+tools, custom providers or dynamic loading) are documented in
+[`.agents/docs/extensibility.md`](.agents/docs/extensibility.md).
+
+## Interactive use
+
+- Slash commands: `/model [id]`, `/thinking`, `/theme [dark|light|<name>]`,
+  `/compact`, `/skill:<name>`, any registered prompt template, plugin extension
+  commands, `/clear`, `/new`, `/quit`, `/help`.
+- **TUI modes:** `inline` (default) owns a fixed region at the bottom and keeps
+  finished transcript blocks in the terminal's own scrollback; `scrollback` is
+  the append-only renderer; `fullscreen` uses the alternate screen; `--tui-mode
+  auto` resolves to inline. A live queue strip shows messages submitted during a
+  run, and `Esc` returns them to the editor.
+- **Editor:** readline keymap, kill/yank/transpose, a disk-backed history,
+  bracketed-paste collapse, and `@file` Tab completion. Markdown is rendered
+  incrementally; tool calls render as cards with a spinner, elapsed time, diff
+  colouring and `Ctrl+O` expand.
+- **Themes:** built-in `dark`/`light`, `system` from `$COLORFGBG`, and named
+  `themes/<name>.jsonc`; colour is downgraded 24-bit → 256 → 16 automatically.
 
 ## Configuration
 
@@ -173,41 +222,21 @@ All files are JSONC (comments and trailing commas; unknown keys are ignored):
   directory is trusted: `--approve`, an interactive `trust this directory?
   [y/N]` prompt in a TTY TUI (saved to `trust.jsonc`), or an existing
   `trust.jsonc` entry.
-- **Keys read by this build**: `default_provider`, `default_model`,
+- **Keys read by this build:** `default_provider`, `default_model`,
   `session_dir`, `theme`, `default_thinking`, `providers.<id>.base_url`,
   `api_keys.<id>`.
-- **Discovered models** — `opcode models --refresh` writes
-  `<config>/models.jsonc`; credentials live in `<config>/auth.jsonc` (0600).
 - **Sessions** — `$OPCODE_SESSION_DIR`, else config `session_dir`, else
-  `$XDG_DATA_HOME/opcode/sessions/--<sanitized-cwd>--/`; one JSONL entry per line.
+  `$XDG_DATA_HOME/opcode/sessions/--<sanitized-cwd>--/`; one JSONL entry per
+  line, `--continue`/`--resume`/`--session`/`--session-dir`/`--no-session`.
 - **Context files** — `AGENTS.override.md`, `AGENTS.md`, `OPCODE.md`,
   `CLAUDE.md` from the config dir and every cwd ancestor; `SYSTEM.md` replaces
-  the system prompt preamble and `APPEND_SYSTEM.md` appends to it (project
+  the system-prompt preamble and `APPEND_SYSTEM.md` appends to it (project
   variants apply only when trusted).
 - **Skills** — `<config>/skills/**/SKILL.md` and
   `<cwd>/.opcode/skills/**/SKILL.md`.
 - **Prompt templates** — `<config>/prompts/*.md` and
   `<cwd>/.opcode/prompts/*.md`, expanded with `$1..$9` / `${N:-default}` / `$@`;
   select with `--template NAME [args...]`.
-
-## Extensibility
-
-- **MCP servers** — stdio JSON-RPC configured in `mcp.jsonc` (config dir and
-  project `.opcode/`); server tools are exposed as `mcp__<server>__<tool>`.
-  Transport is stdio and only `tools/*` is read; a server `isError` maps to a
-  tool error and shutdown is `SIGTERM` → bounded reap → `SIGKILL`.
-- **Static C plugins** — the stable C ABI lives in
-  [`include/opcode_plugin.h`](include/opcode_plugin.h); plugins are listed in
-  `plugins/manifest.json`, and `tools/gen-plugins.py` plus the Makefile link
-  them with a per-plugin `opcode_plugin_init_<name>` symbol. A plugin can
-  register tools, commands and event handlers and call back into the host
-  vtable. Loading is static: the Makefile's plugin symbol rename keeps the
-  linked init names unique, and a static no-libc binary cannot `dlopen`. The
-  current host limitations and the runtime-loading options are documented in
-  [`.agents/docs/extensibility.md`](.agents/docs/extensibility.md).
-- **Machine modes** — `--mode json` (JSONL events) and `--mode rpc` (own
-  documented command set) for editors and harnesses. `--verbose` raises the log
-  gate to `LOG_DEBUG` and prints request/response/tool diagnostics on stderr.
 
 ## Architecture
 
@@ -220,43 +249,32 @@ All files are JSONC (comments and trailing commas; unknown keys are ignored):
 | `core/` | agent loop, transcript/messages, prompt, compaction, session JSONL, config, auth, catalog |
 | `prov/` | Anthropic Messages and OpenAI Chat/Responses adapters |
 | `tools/` | built-in tools: `read`, `bash`, `edit`, `write`, `ls`, `find`, `grep` |
-| `tui/` | terminal, cell-grid renderer, editor, input, markdown, view |
+| `tui/` | terminal, cell-grid renderer, editor, input, markdown, cards, status, themes |
 | `ext/` | static plugins (C ABI), MCP client |
 | `app/` | TUI/print/JSON/RPC modes, subcommands, flags |
 
-Rules between the layers:
+Rules between the layers: portable code calls Layer 0/1 and includes `opcode.inc`
+plus the shared interface headers it needs (`core/core.inc`, `net/net.inc`,
+`wire/url.inc`/`wire/http_client.inc`); `plat/<os>/` and `net/<os>/` never include
+core headers; backends are link-time choices (tests link `net/mock.s` for
+deterministic replay); every layer returns negative Linux `errno` values in
+`rax`; JSON is used only at external boundaries.
 
-1. `base/`, `core/`, `prov/`, `tools/`, `wire/`, `tui/`, `ext/` and `app/`
-   call Layer 0/1 functions only and include `opcode.inc` plus the shared
-   interface headers each layer needs — `core/core.inc` (core ABI),
-   `net/net.inc` (Layer 1) and `wire/url.inc`/`wire/http_client.inc`
-   (transport).
-2. `plat/<os>/` and `net/<os>/` never include core headers.
-3. Platform/network backends are selected at link time; the tests link
-   `net/mock.s` for deterministic replay instead of the real sockets.
-4. Every layer returns negative Linux `errno` values in `rax`; OS adapters
-   translate their own error codes.
-5. JSON at external boundaries, typed structs inside.
+## Decisions
 
-## Status & roadmap
+- **Language:** hand-written x86-64 assembly (GNU `as`, Intel syntax); the only C
+  is the vendored freestanding mbedTLS and freestanding plugin code.
+- **Runtime:** none — no libc, no dynamic linker, no GC, no interpreter; direct
+  Linux syscalls.
+- **TLS:** vendored freestanding mbedTLS 3.6.2 on Linux; the `tls_*` contract keeps
+  a future swap link-local.
+- **Formats:** JSONC for config/auth/themes, our own JSONL schema for sessions.
+- **Auth:** OAuth subscription logins ship in the core feature set.
+- **Extensibility:** MCP first, then a versioned, append-only **C ABI**; loading
+  is static because a `-nostdlib` static binary cannot `dlopen`.
+- **Parallel tool execution** on by default. **MIT** licensed.
 
-Opcode is implemented on Linux x86-64 (the reference) and has working
-linux-aarch64, macOS arm64 and Windows x86-64 ports; see
-[`.agents/docs/roadmap.md`](.agents/docs/roadmap.md) for the per-component
-state. `make check` runs the full suite on the native build (run it for the
-current count; a clean tree ends `0 failed`), and `make test-qemu` runs the
-same suite against the cross-built AArch64 ELF under `qemu-aarch64`, with 0
-skipped.
-
-Remaining work: runtime plugin loading
-([`.agents/docs/extensibility.md`](.agents/docs/extensibility.md) §3.2), a
-retry/backoff layer for transient network and HTTP 429/5xx failures, the
-linux-riscv64 port, and the first runs on real hardware — linux-aarch64 passes
-under `qemu-aarch64` but has not run on silicon, the macOS arm64 port's
-`macos-14` CI lane is defined but has not run, and the Windows binary has never
-run on real Windows (`.agents/docs/ports.md`).
-
-Further documentation:
+## Further documentation
 
 | Document | Contents |
 |---|---|
@@ -265,9 +283,9 @@ Further documentation:
 | [`.agents/docs/platform.md`](.agents/docs/platform.md) | Layer 0/1 contracts, ports, DNS, the vendored TLS decision |
 | [`.agents/docs/core-agent.md`](.agents/docs/core-agent.md) | agent loop, data model, tools, providers, OAuth, sessions, config |
 | [`.agents/docs/extensibility.md`](.agents/docs/extensibility.md) | plugin ABI, events, MCP, skills, RPC |
-| [`.agents/docs/tui.md`](.agents/docs/tui.md) | renderer, editor, markdown, view buffer |
+| [`.agents/docs/tui.md`](.agents/docs/tui.md) | renderer, editor, markdown, cards, status, themes |
 | [`.agents/docs/roadmap.md`](.agents/docs/roadmap.md) | per-component status, testing, builds |
-| [`.agents/docs/ports.md`](.agents/docs/ports.md) | the linux-aarch64 port (shim, ABI boundary, emulation matrix), the macOS arm64 port (translation, syscall shim, verification levels, gaps), and Windows and riscv64 plans |
+| [`.agents/docs/ports.md`](.agents/docs/ports.md) | the linux-aarch64, macOS arm64 and Windows ports, and the riscv64 plan |
 
 ## Thanks
 
