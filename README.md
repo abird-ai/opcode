@@ -91,7 +91,7 @@ marked prerelease.
 |---|---|---|---|
 | Linux x86-64 | yes (reference) | native `make check` | yes |
 | Linux aarch64 | yes (cross) | golden suite under `qemu-aarch64` | no (qemu only) |
-| macOS arm64 | yes (translated Mach-O) | `macos-14` lane defined, not run here | no |
+| macOS arm64 | yes (translated Mach-O) | `macos-14`: build + smoke gate; full suite informational (port not hardware-verified) | no |
 | Windows x86-64 | yes (PE32+, `-nostdlib`) | Wine lane (suite subset) | no (Wine only) |
 | Linux riscv64 | no — no port sources yet | gated closed | no |
 | macOS x86-64 | no — the Darwin work is AArch64-only | — | no |
@@ -100,8 +100,9 @@ marked prerelease.
 suite passed. Linux x86-64 is exercised end to end. Everything else is
 cross-built and validated as far as a Linux host allows: Linux aarch64 runs the
 whole suite under `qemu-aarch64` but has never run on silicon; macOS arm64
-assembles and cross-links to a valid Mach-O (`tools/check-macho.sh`) but the
-Darwin platform layer has never run; Windows builds and runs under Wine but has
+builds, packages and passes the Layer-0 smoke in CI (`macos-14`) but its full
+suite is still red and is therefore informational until the Darwin platform
+layer is driven on real hardware; Windows builds and runs under Wine but has
 never run on real Windows. The riscv64 target has no port sources and is gated
 closed.
 
