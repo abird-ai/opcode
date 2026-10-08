@@ -354,7 +354,7 @@ skill/prompt/theme scanners. The ABI is append-only with
 `cli.s` is the shared
 flag parser, usage renderer and session resolver; `modes.s` implements the JSON
 and RPC front ends; `run.s` and `tui.s` drive print mode and the TUI;
-`onboard.s` is the first-run provider menu; `login.s`, `models.s`, `fetch.s` and
+`onboard.s` is the first-run provider/model picker; `login.s`, `models.s`, `fetch.s` and
 `update.s` implement the subcommands.
 
 Modes: the TUI (the default), `-p`/`--print` (one prompt to stdout, exit 0/1),

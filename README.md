@@ -145,7 +145,7 @@ link in statically (see [Extensions](#mcp-and-extensions)).
 ./build/opcode update                     # check for a newer release
 ```
 
-With no provider configured the first run shows an onboarding menu. Built-in
+With no provider configured the first run opens provider and model pickers. Built-in
 providers: **anthropic** (`claude-*`), **openai** (`gpt-*`), **google**
 (`gemini-*`, served through Google's OpenAI-compatible endpoint), **ollama**
 (local, no key) and **ollama-cloud**. OpenAI is the default provider. Cloud
