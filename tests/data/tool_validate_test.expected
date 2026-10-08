@@ -1,0 +1,13 @@
+read.required ok
+read.missing ok
+read.null ok
+read.wrongtype ok
+read.optional-ok ok
+write.required ok
+write.missing-path ok
+write.missing-content ok
+write.wrongtype ok
+edit.required ok
+edit.missing-path ok
+edit.missing-edits ok
+edit.wrongtype ok

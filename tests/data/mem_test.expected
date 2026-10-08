@@ -1,0 +1,6 @@
+mem alloc ok
+mem cap ok
+mem zero ok
+mem reuse ok
+sb ok
+vec ok

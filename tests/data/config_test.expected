@@ -1,0 +1,6 @@
+config user ok
+config trust off ok
+config trust on ok
+config auth flag ok
+config auth file ok
+config done

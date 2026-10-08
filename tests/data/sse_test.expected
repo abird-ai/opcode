@@ -1,0 +1,13 @@
+sse ok basic
+sse ok multiline
+sse ok event
+sse ok crlf
+sse ok cr
+sse ok split
+sse ok batch
+sse ok comment
+sse ok id
+sse ok nospace
+sse ok done
+sse ok empty
+sse done

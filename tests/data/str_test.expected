@@ -1,0 +1,7 @@
+memcpy ok
+strlen ok
+eq ok
+starts ok
+find ok
+parse ok
+fmt ok

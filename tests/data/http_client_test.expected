@@ -1,0 +1,11 @@
+http-client connect ok
+http-client send ok
+http-client chunked ok
+http-client cl ok
+http-client eof ok
+http-client trunc ok
+http-client badchunk ok
+http-client close ok
+http-client timeout ok
+http-client ip4 ok
+http-client done

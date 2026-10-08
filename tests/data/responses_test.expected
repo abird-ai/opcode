@@ -1,0 +1,8 @@
+responses ok notools
+{"model":"gpt-test","instructions":"SYS","input":[{"role":"user","content":[{"type":"input_text","text":"hi"}]},{"role":"assistant","content":[{"type":"output_text","text":"Hello"}]},{"type":"function_call","call_id":"call_a","name":"fake","arguments":"{\"x\":1}"},{"type":"function_call_output","call_id":"call_a","output":"ok"}],"stream":true,"store":false,"max_output_tokens":4096}
+responses ok nosys
+{"model":"gpt-test","instructions":"","input":[{"role":"user","content":[{"type":"input_text","text":"hi"}]},{"role":"assistant","content":[{"type":"output_text","text":"Hello"}]},{"type":"function_call","call_id":"call_a","name":"fake","arguments":"{\"x\":1}"},{"type":"function_call_output","call_id":"call_a","output":"ok"}],"stream":true,"store":false,"max_output_tokens":4096,"tools":[{"type":"function","name":"fake","description":"A fake tool","parameters":{"type":"object","properties":{"x":{"type":"string"}},"required":["x"]},"strict":false}],"tool_choice":"auto","parallel_tool_calls":true}
+responses ok req
+{"model":"gpt-test","instructions":"SYS","input":[{"role":"user","content":[{"type":"input_text","text":"hi"}]},{"role":"assistant","content":[{"type":"output_text","text":"Hello"}]},{"type":"function_call","call_id":"call_a","name":"fake","arguments":"{\"x\":1}"},{"type":"function_call_output","call_id":"call_a","output":"ok"}],"stream":true,"store":false,"max_output_tokens":4096,"tools":[{"type":"function","name":"fake","description":"A fake tool","parameters":{"type":"object","properties":{"x":{"type":"string"}},"required":["x"]},"strict":false}],"tool_choice":"auto","parallel_tool_calls":true}
+responses ok sse
+responses done

@@ -1,0 +1,13 @@
+count: 4
+cost: $1.234567
+dump20: M | think:off  ready
+dump4: read
+count: 6
+seg 0 0 1 len: 2 a0
+seg 0 0 3 len: 2 b0
+seg 0 5 0 len: 2 a5
+seg 0 50 5 len: 191 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+seg 1 0 2 len: 7 right-a
+seg 1 0 4 len: 7 right-b
+version: 10
+status ok

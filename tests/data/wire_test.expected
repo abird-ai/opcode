@@ -1,0 +1,16 @@
+url ok https
+url ok http
+url ok port
+url ok ipv6
+url ok userinfo
+url ok invalid
+http ok simple
+http ok chunked
+http ok split
+http ok close
+http ok 204
+http ok badchunk
+http ok toolong
+http ok duplicate-cl
+http ok xchunked
+wire done

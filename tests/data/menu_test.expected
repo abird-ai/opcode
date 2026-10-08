@@ -1,0 +1,6 @@
+menu.open ok
+menu.esc-consumed ok
+menu.esc-closed ok
+menu.same-word-dismissed ok
+menu.nonmenu-closed ok
+menu.reopen-same-word ok

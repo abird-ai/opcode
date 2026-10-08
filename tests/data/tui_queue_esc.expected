@@ -1,0 +1,28 @@
+> run the checks
+Let me check.
+[bash] {"command": "echo hi"}                         | 0ms
+
+
+
+
+
+
+queued 1: "keep me" (esc aborts)
+────────────────────────────────────────────────────────────
+
+────────────────────────────────────────────────────────────
+anthropic/claude-sonnet-4-5 | think:off | tok:10/25    | 0ms
+> run the checks
+Let me check.
+[bash] {"command": "echo hi"}                        ok 0ms
+ [signal 9]
+
+Let me check.
+[bash] {"command": "echo hi"}                        ok 0ms
+ [signal 9]
+
+
+────────────────────────────────────────────────────────────
+keep me
+────────────────────────────────────────────────────────────
+anthropic/claude-sonnet-4-5 | think:off | tok:10/25    ready

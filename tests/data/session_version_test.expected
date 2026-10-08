@@ -1,0 +1,7 @@
+session version current ok
+session version legacy ok
+opcode: session schema 2 is newer than supported schema 1; the file was written by a newer opcode
+session version newer ok
+opcode: session schema_version must be a number
+session version nonnumeric ok
+session version done

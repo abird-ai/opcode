@@ -1,0 +1,13 @@
+{"type":"usage","input":10,"output":1,"cache_read":0,"cache_write":0}
+{"type":"text_delta","text":"Let me check. "}
+{"type":"tool_start","id":"toolu_1","name":"bash"}
+{"type":"tool_args","json":"{\"command\": \"echo hi\"}"}
+{"type":"tool_end"}
+{"type":"usage","input":10,"output":25,"cache_read":0,"cache_write":0}
+{"type":"done","stop":"tool_use"}
+{"type":"tool_result","text":"hi\n[exit 0]"}
+{"type":"usage","input":30,"output":1,"cache_read":0,"cache_write":0}
+{"type":"text_delta","text":"All done."}
+{"type":"usage","input":30,"output":4,"cache_read":0,"cache_write":0}
+{"type":"done","stop":"stop"}
+{"type":"agent_end","exit":0}

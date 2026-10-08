@@ -1,0 +1,33 @@
+dark fg ok
+dark bg ok
+light fg ok
+light bg ok
+system COLORFGBG=0;7 ok
+system COLORFGBG=0;0 ok
+system COLORFGBG=15;15 ok
+system COLORFGBG=15;8 ok
+system COLORFGBG=x ok
+system no COLORFGBG ok
+named base dark ok
+named fg ok
+config accent ok
+named bg ok
+invalid bad/name ok
+invalid .. ok
+invalid empty ok
+name reject / ok
+name reject backslash ok
+name reject $ ok
+name reject . ok
+name reject .. ok
+project ok ok
+project untrusted ok
+true fg ok
+true bg ok
+256 fg ok
+256 bg ok
+256 ramp ok
+16 fg ok
+16 bg ok
+16 muted pin ok
+no bg 49 ok

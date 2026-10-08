@@ -1,0 +1,24 @@
+ error: error: unknown tool:
+
+[bash] {"command": "for i in 1 2  | 0ms
+
+────────────────────────────────────────
+
+────────────────────────────────────────
+anthropic/claude-sonnet-4-5 | thin | 0ms
+> run the checks
+[missing_tool] {}               err 0ms
+ error: error: unknown tool:
+
+────────────────────────────────────────
+
+────────────────────────────────────────
+anthropic/claude-sonnet-4-5 | thin | 0ms
+> run the checks
+[missing_tool] {}               err 0ms
+ error: error: unknown tool:
+
+────────────────────────────────────────
+
+────────────────────────────────────────
+anthropic/claude-sonnet-4-5 | thin ready

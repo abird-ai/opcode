@@ -1,0 +1,5 @@
+eof body ok
+eof close ok
+eof pending ok
+eof split ok
+eof done ok

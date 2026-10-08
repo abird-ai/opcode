@@ -1,0 +1,104 @@
+
+
+
+
+
+
+
+
+
+
+────────────────────────────────────────────────────────────
+Ready. Press Ctrl-C once to clear, twice to exit
+────────────────────────────────────────────────────────────
+anthropic/claude-sonnet-4-5 | think:off | tok:0/0      ready
+
+
+/clear    clear the transcript view
+/help     show key bindings and slash commands
+/model    switch model (no argument reports it)
+/new      clear the transcript view and start a new session
+/quit     exit opcode
+/theme    switch theme (dark|light|<name>)
+/thinking set reasoning level (off|low|medium|high)
+/compact  compact the conversation into a summary
+────────────────────────────────────────────────────────────
+/
+────────────────────────────────────────────────────────────
+anthropic/claude-sonnet-4-5 | think:off | tok:0/0      ready
+
+
+/clear    clear the transcript view
+/help     show key bindings and slash commands
+/model    switch model (no argument reports it)
+/new      clear the transcript view and start a new session
+/quit     exit opcode
+/theme    switch theme (dark|light|<name>)
+/thinking set reasoning level (off|low|medium|high)
+/compact  compact the conversation into a summary
+────────────────────────────────────────────────────────────
+/
+────────────────────────────────────────────────────────────
+anthropic/claude-sonnet-4-5 | think:off | tok:0/0      ready
+# opcode
+- Enter submit, Alt+Enter newline
+- Esc abort run, Ctrl+C clear, Ctrl+D delete/quit
+- Ctrl+A/E line ends, Ctrl+B/F chars, Alt+B/F words
+- Ctrl+W/Alt+Backspace kill word, Ctrl+K/U/Y kill/yank
+- PgUp/PgDn scroll, Tab complete @file, Ctrl+O expand tool
+- /model [id] switch model (no argument reports it)
+- /thinking [off|low|medium|high]
+- /compact compact the conversation into a summary
+- /theme [dark|light|<name>]
+────────────────────────────────────────────────────────────
+
+────────────────────────────────────────────────────────────
+anthropic/claude-sonnet-4-5 | think:off | tok:0/0      ready
+# opcode
+- Enter submit, Alt+Enter newline
+- Esc abort run, Ctrl+C clear, Ctrl+D delete/quit
+- Ctrl+A/E line ends, Ctrl+B/F chars, Alt+B/F words
+- Ctrl+W/Alt+Backspace kill word, Ctrl+K/U/Y kill/yank
+- PgUp/PgDn scroll, Tab complete @file, Ctrl+O expand tool
+- /model [id] switch model (no argument reports it)
+- /thinking [off|low|medium|high]
+- /compact compact the conversation into a summary
+- /theme [dark|light|<name>]
+────────────────────────────────────────────────────────────
+hello world
+────────────────────────────────────────────────────────────
+anthropic/claude-sonnet-4-5 | think:off | tok:0/0      ready
+
+
+──────────────────────────────
+hello world
+──────────────────────────────
+anthropic/claude-sonnet- ready
+
+
+
+
+
+
+
+
+
+
+────────────────────────────────────────────────────────────
+hello world
+────────────────────────────────────────────────────────────
+anthropic/claude-sonnet-4-5 | think:off | tok:0/0      ready
+> run the checks
+Let me check.
+[bash] {"command": "echo hi"}                        ok 0ms
+ hi
+ [exit 0]
+
+All done.
+
+
+
+────────────────────────────────────────────────────────────
+
+────────────────────────────────────────────────────────────
+anthropic/claude-sonnet-4-5 | think:off | tok:40/29    ready

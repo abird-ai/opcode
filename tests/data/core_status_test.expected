@@ -1,0 +1,17 @@
+think initial: off
+think medium: medium
+think high: high
+usage total: 22
+ctx window: 200000
+model: claude-sonnet-4-5
+model bare: claude-haiku-4-5
+model reject: -22
+skills count: 2
+skill 0: alpha
+skill 1: beta
+body 0: Body alpha.
+body 1: Body beta.
+skill missing: -2
+templates: 1
+template 0: hello
+core_status ok

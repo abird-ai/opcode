@@ -1,0 +1,10 @@
+sanitize exact ok
+sanitize esc ok
+sanitize controls ok
+sanitize text ok
+sanitize introducer ok
+sanitize grid ok
+sanitize emit ok
+sanitize attach ok
+sanitize tab ok
+sanitize done
