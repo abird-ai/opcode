@@ -42,8 +42,9 @@ term_sb:         .zero SB_SIZE
 .text
 
 # term_init() -> 0|-errno
-# Interactive: save + raw mode, enter the alternate screen, hide the cursor,
-# clear the screen, install SIGWINCH. Headless: only install SIGWINCH.
+# Interactive: arm the fatal-signal restore, then save + raw mode, enter the
+# alternate screen, hide the cursor, clear the screen, install SIGWINCH.
+# Headless: only install SIGWINCH.
 FN term_init
     PROLOGUE 0
     lea rax, [rip + term_restore]
@@ -54,6 +55,12 @@ FN term_init
     jne .Ltinit_inline
     cmp dword ptr [rip + term_flags], 0
     jne .Ltinit_ok
+    # Register the fatal-signal restore BEFORE entering raw/alt mode: a signal
+    # that lands between entering and arming the handler would otherwise leave
+    # the terminal raw.  term_restore is a no-op until the terminal is entered.
+    call os_sig_cleanup
+    test rax, rax
+    js .Ltinit_sigfail
     lea rdi, [rip + term_saved]
     call os_tty_raw
     test rax, rax
@@ -82,6 +89,11 @@ FN term_init
 .Ltinit_inline:
     cmp dword ptr [rip + term_flags], 0
     jne .Ltinit_ok
+    # Same ordering as fullscreen: arm the restore before the raw/alt enter so
+    # a signal in the enter window cannot strand a raw terminal.
+    call os_sig_cleanup
+    test rax, rax
+    js .Ltinit_sigfail
     lea rdi, [rip + term_saved]
     call os_tty_raw
     test rax, rax
@@ -102,6 +114,11 @@ FN term_init
     mov [rip + term_cache_rows], rdx
     xor eax, eax
     EPILOGUE
+# The signal-cleanup install itself failed: no handler is armed and the tty is
+# untouched, so drop the exit hook and report the error.
+.Ltinit_sigfail:
+    mov qword ptr [rip + g_exit_hook], 0
+    jmp .Ltinit_out
 .Ltinit_ok:
     xor eax, eax
     EPILOGUE

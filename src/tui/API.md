@@ -118,12 +118,13 @@ printed) plus `t_in_base_len` (the transcript length the view prefix covered)
 keep a rebuild or a second frame from printing a row twice. A live (streaming or
 running-card) block is rendered after `t_in_live_base` and never committed.
 
-On resize the terminal has already reflowed, so `inline_region_erase` clears the
-region with cursor-relative movement only (`ESC7` `ESC[2K` `ESC[1B` …, `ESC8`) —
-never a row recomputed from the old width — over the rows each owned row
-re-wraps to at the new width (`t_in_cw` holds each row's last content column),
-and the next frame re-anchors at the new bottom and repaints. Detection is the
-SIGWINCH pipe plus `term_poll_resize`, both funnelled through `tui_resize`.
+On resize the terminal has already reflowed, so `inline_region_erase` clears from
+the parked region top to the end of the screen (`\r` + `ESC[J`) — never a row
+recomputed from the old width — so a reflow height change or an earlier partial
+erase cannot leave stale rows or a stacked theme band below the region; the next
+frame re-anchors at the new bottom and repaints. The shrink (e.g. picker-close)
+path uses the same erase. Detection is the SIGWINCH pipe plus `term_poll_resize`,
+both funnelled through `tui_resize`.
 
 `fullscreen` is unchanged: the alternate screen, a full cell grid and the
 differential `term_flush`, with the cursor parked on the caret cell.
@@ -562,7 +563,9 @@ written there instead, so goldens can assert the exact emitted byte stream
 keeps the requested `--tui-mode` (default inline) instead of forcing the
 fullscreen grid dump.
 
-Fatal-signal coverage: `os_sig_cleanup` installs the restore
-handler for HUP, INT, QUIT, ABRT, **BUS, FPE**, SEGV and TERM; `term_restore` is
-idempotent and resets autowrap (`ESC[?7h`), bracketed paste, SGR, cursor,
-alternate screen and the OSC 11 background.
+Fatal-signal coverage: `term_init` arms the restore (the exit hook plus
+`os_sig_cleanup` for HUP, INT, QUIT, ABRT, **BUS, FPE**, SEGV and TERM) *before*
+entering raw/alt mode, so a signal in the enter window cannot leave the terminal
+raw; the enter-failure path clears the hook. `term_restore` is idempotent and
+resets autowrap (`ESC[?7h`), bracketed paste, SGR, cursor, alternate screen and
+the OSC 11 background.

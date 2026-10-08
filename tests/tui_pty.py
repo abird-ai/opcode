@@ -12,7 +12,8 @@ can be asserted:
     autowrap off/on around every frame, never the alternate screen;
   * finished transcript lines are committed once, in order, and the region
     chrome (rules, composer, status footer) never reaches scrollback;
-  * a resize storm (idle and mid-turn) keeps that invariant.
+  * a resize storm (idle and mid-turn) keeps that invariant;
+  * the ESC[J erase sequence (owned-region clear) is understood by the parser.
 """
 import fcntl
 import os
@@ -87,9 +88,25 @@ class Vt:
             for x in range(self.c, self.W):
                 self.rows[self.r][x] = " "
         elif fin == "J":
-            for y in range(self.r, self.H):
-                for x in range(self.W):
-                    self.rows[y][x] = " "
+            # ED: erase in display. 0/cursor->end (opcode's owned-region erase),
+            # 1/start->cursor, 2/whole screen.
+            mode = 0
+            if parts and parts[0] != "":
+                try:
+                    mode = int(parts[0])
+                except ValueError:
+                    mode = 0
+            if mode == 2:
+                for y in range(self.H):
+                    self.rows[y] = [" "] * self.W
+            elif mode == 1:
+                for y in range(0, self.r):
+                    self.rows[y] = [" "] * self.W
+                for x in range(0, min(self.c + 1, self.W)):
+                    self.rows[self.r][x] = " "
+            else:
+                for y in range(self.r, self.H):
+                    self.rows[y] = [" "] * self.W
 
     def feed(self, data):
         i, n = 0, len(data)

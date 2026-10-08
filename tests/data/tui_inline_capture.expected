@@ -13,13 +13,13 @@ tools: read, bash, edit, write, ls, find, grep, hello[0m
 [2K[0m[37m[40m [exit 0][0m[40m                                                   
 [2K
 [2K[0m[37m[49mAll done.
-[?7h[?25l[?7l7[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K8[2K[0m[90m[49m[2m────────────────────────────────────────────────────────────
+[?7h[?25l[?7l[J[2K[0m[90m[49m[2m────────────────────────────────────────────────────────────
 [2K[0m[90m[49m[2m[7mR[0m[90m[49m[2meady. Press Ctrl-C once to clear, twice to exit
 [2K[0m[90m[49m[2m────────────────────────────────────────────────────────────
-[2K[0m[90m[40manthropic/claude-sonnet-4-5 | think:medium | tok:40/29 ready[3A[1G[?25l[?7h[?25l[?7l7[2K[1B[2K[1B[2K[1B[2K8[2K[0m[90m[49m[2m────────────────────────────────────────────────────────────
+[2K[0m[90m[40manthropic/claude-sonnet-4-5 | think:medium | tok:40/29 ready[3A[1G[?25l[?7h[?25l[?7l[2K[0m[90m[49m[2m────────────────────────────────────────────────────────────
 [2K[0m[90m[49m[2m[7mR[0m[90m[49m[2meady. Press Ctrl-C once to clear, twice to exit
 [2K[0m[90m[49m[2m────────────────────────────────────────────────────────────
-[2K[0m[90m[40manthropic/claude-sonnet-4-5 | think:medium | tok:40/29 ready[3A[1G[?25l[?7h[?7l7[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K8[?7h[?25l[?7l[2K[0m[90m[49m[2m────────────────────────────────────────
+[2K[0m[90m[40manthropic/claude-sonnet-4-5 | think:medium | tok:40/29 ready[3A[1G[?25l[?7h[?7l[J[?7h[?25l[?7l[2K[0m[90m[49m[2m────────────────────────────────────────
 [2K[0m[90m[49m[2m[7mR[0m[90m[49m[2meady. Press Ctrl-C once to clear, twic
 [2K[0m[90m[49m[2m────────────────────────────────────────
-[2K[0m[90m[40manthropic/claude-sonnet-4-5 | thin ready[3A[1G[?25l[?7h[?7l7[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K8[?7h
+[2K[0m[90m[40manthropic/claude-sonnet-4-5 | thin ready[3A[1G[?25l[?7h[?7l[J[?7h

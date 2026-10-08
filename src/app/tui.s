@@ -318,10 +318,11 @@ t_sessions:       .zero 8
 # Run-in-flight /resume defers the switch until the abort unwinds.
 t_switch_pending: .zero 4
 # S7 owned inline region state.  t_in_rows is the region height painted last
-# frame; t_in_commit is the first transcript message not yet printed to
-# scrollback; t_in_live_base is the number of view rows those committed
-# messages occupied when the view was last built; t_in_cw holds each owned
-# row's last content column so a resize can estimate its reflowed height.
+# frame; the next frame erases to the end of the screen when the region shrank.
+# t_in_commit is the first transcript message not yet printed to scrollback;
+# t_in_live_base is the number of view rows those committed messages occupied
+# when the view was last built; t_in_cw records each owned row's last content
+# column (the erase no longer counts reflow rows).
 t_in_rows:        .zero 4
 t_in_commit:      .zero 4
 t_in_live_base:   .zero 4
@@ -2249,26 +2250,19 @@ FN tui_draw_region
     call sb_clear
     lea rdi, [rip + t_osb]; lea rsi, [rip + .Lin_hide];   mov edx, 6; call sb_push
     lea rdi, [rip + t_osb]; lea rsi, [rip + .Lin_aw_off]; mov edx, 5; call sb_push
+    # Shrink: clear the old region before repainting so no stale rows survive
+    # below the new, shorter region (e.g. the picker closing).  The cursor is
+    # parked at the region top, so erase from there to the end of the screen
+    # (\r ESC[J) instead of counting the old rows.  Anything a reflow or an
+    # earlier partial erase left below the top is covered; rows above the
+    # region (banner, shell history) stay untouched.
     mov eax, [rip + t_in_rows]
     test eax, eax
     jz .Lrg_noclr
-    mov [rbp + RG_s], eax
-    lea rdi, [rip + t_osb]; lea rsi, [rip + .Lin_decsc]; mov edx, 2; call sb_push
-    xor r12d, r12d
-.Lrg_clr:
-    cmp r12d, [rbp + RG_s]
-    jae .Lrg_clr_done
-    lea rdi, [rip + t_osb]; lea rsi, [rip + .Lin_rowclr]; mov edx, 4; call sb_push
-    mov eax, r12d
-    inc eax
-    cmp eax, [rbp + RG_s]
-    jae .Lrg_clr_next
-    lea rdi, [rip + t_osb]; lea rsi, [rip + .Lin_down1]; mov edx, 4; call sb_push
-.Lrg_clr_next:
-    inc r12d
-    jmp .Lrg_clr
-.Lrg_clr_done:
-    lea rdi, [rip + t_osb]; lea rsi, [rip + .Lin_decrc]; mov edx, 2; call sb_push
+    cmp [rbp + RG_fh], eax
+    jae .Lrg_noclr
+    lea rdi, [rip + t_osb]; lea rsi, [rip + .Lin_cr];    mov edx, 1; call sb_push
+    lea rdi, [rip + t_osb]; lea rsi, [rip + .Lin_erase]; mov edx, 3; call sb_push
 .Lrg_noclr:
     xor r12d, r12d
 .Lrg_row:
@@ -2315,76 +2309,22 @@ FN tui_draw_region
     mov [rip + t_in_rows], eax
     EPILOGUE
 
-# inline_region_erase(edi=new_cols): clear the owned region before trusting
-# new geometry, using only cursor-relative movement.  The rows the region can
-# occupy after the terminal re-wraps every owned row at new_cols is
-# sum(ceil(width/new_cols)), at least the old height, capped to the height.
+# inline_region_erase(): clear the owned region before trusting new geometry.
+# The cursor is parked at the region top; clear from there to the end of the
+# screen (\r ESC[J).  Any stale rows from a previous geometry -- a reflow that
+# changed the region's height, or an earlier partial erase -- are below the top,
+# so one erase-to-end covers them; rows above the region (banner, shell history)
+# are untouched.  The old new_cols argument is unused (kept for the call ABI).
 FN inline_region_erase
-    PROLOGUE 32
-    mov r12d, edi
-    test r12d, r12d
-    jnz .Lire_c
-    mov r12d, 1
-.Lire_c:
-    mov eax, [rip + t_in_rows]
-    mov [rbp - 48], eax
-    test eax, eax
-    jz .Lire_done
-    mov qword ptr [rbp - 56], 0
-    xor r13d, r13d
-.Lire_sum:
-    cmp r13d, [rbp - 48]
-    jae .Lire_sum_done
-    lea rdx, [rip + t_in_cw]
-    mov eax, [rdx + r13*4]
-    test eax, eax
-    jz .Lire_one
-    add eax, r12d
-    dec eax
-    xor edx, edx
-    div r12d
-    jmp .Lire_add
-.Lire_one:
-    mov eax, 1
-.Lire_add:
-    add [rbp - 56], rax
-    inc r13d
-    jmp .Lire_sum
-.Lire_sum_done:
-    mov rax, [rbp - 56]
-    cmp rax, [rbp - 48]
-    jae .Lire_have
-    mov rax, [rbp - 48]
-.Lire_have:
-    mov ecx, [rip + t_h]
-    cmp rax, rcx
-    jbe .Lire_clamp
-    mov rax, rcx
-.Lire_clamp:
-    test rax, rax
-    jnz .Lire_nz
-    mov eax, 1
-.Lire_nz:
-    mov [rbp - 64], rax
+    PROLOGUE 0
+    cmp dword ptr [rip + t_in_rows], 0
+    je .Lire_done
     lea rdi, [rip + t_osb]
     call sb_clear
     lea rdi, [rip + t_osb]; lea rsi, [rip + .Lin_aw_off]; mov edx, 5; call sb_push
-    lea rdi, [rip + t_osb]; lea rsi, [rip + .Lin_decsc];  mov edx, 2; call sb_push
-    xor r13d, r13d
-.Lire_loop:
-    cmp r13, [rbp - 64]
-    jae .Lire_loop_done
-    lea rdi, [rip + t_osb]; lea rsi, [rip + .Lin_rowclr]; mov edx, 4; call sb_push
-    lea rax, [r13 + 1]
-    cmp rax, [rbp - 64]
-    jae .Lire_ln
-    lea rdi, [rip + t_osb]; lea rsi, [rip + .Lin_down1]; mov edx, 4; call sb_push
-.Lire_ln:
-    inc r13
-    jmp .Lire_loop
-.Lire_loop_done:
-    lea rdi, [rip + t_osb]; lea rsi, [rip + .Lin_decrc]; mov edx, 2; call sb_push
-    lea rdi, [rip + t_osb]; lea rsi, [rip + .Lin_aw_on]; mov edx, 5; call sb_push
+    lea rdi, [rip + t_osb]; lea rsi, [rip + .Lin_cr];     mov edx, 1; call sb_push
+    lea rdi, [rip + t_osb]; lea rsi, [rip + .Lin_erase];  mov edx, 3; call sb_push
+    lea rdi, [rip + t_osb]; lea rsi, [rip + .Lin_aw_on];  mov edx, 5; call sb_push
     mov edi, 1
     lea rax, [rip + t_osb]
     mov rsi, [rax + SB_ptr]
@@ -5653,12 +5593,6 @@ FN tui_run
     test rax, rax
     js .Ltr_init_fail
     call tui_theme_sync
-    cmp qword ptr [rip + g_tui_headless], 0
-    jne .Ltr_hook_skip
-    call os_sig_cleanup
-    test rax, rax
-    js .Ltr_init_fail
-.Ltr_hook_skip:
     mov eax, [rip + g_tui_headless]
     test eax, eax
     jnz 4f
@@ -5782,6 +5716,9 @@ FN tui_run
     EPILOGUE
 .Ltr_init_fail:
     call term_restore
+    # The restore already ran; drop the registered exit hook so a late fatal
+    # signal cannot re-enter a terminal we no longer own.
+    mov qword ptr [rip + g_exit_hook], 0
     call mcp_shutdown
     mov edi, 2
     lea rsi, [rip + .Lerr_init]

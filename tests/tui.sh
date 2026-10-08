@@ -256,11 +256,11 @@ elif command -v python3 > /dev/null 2>&1 && \
         python3 -c '
 import re, sys
 SEP = b"\x1b[?7l"
-# The owned-region erase is ESC7 ( ESC[2K ESC[1B )* ESC[2K ESC8; the number of
-# re-wrap rows it clears is wall-clock dependent, so collapse any run length to
-# one marker before comparing.  Consecutive byte-identical frames (the repaint
-# count) are dropped too.
-ERASE = re.compile(rb"\x1b7(?:\x1b\[2K\x1b\[1B)*\x1b\[2K\x1b8")
+# The owned-region erase clears from the parked region top to the end of the
+# screen (`\r ESC[J`); an older capture used a counted ESC7/ESC[2K..ESC8 run.
+# Collapse either form to one marker before comparing.  Consecutive
+# byte-identical frames (the repaint count) are dropped too.
+ERASE = re.compile(rb"(?:\r\x1b\[J)|(?:\x1b7(?:\x1b\[2K\x1b\[1B)*\x1b\[2K\x1b8)")
 def canon(path, out):
     parts = open(path, "rb").read().split(SEP)
     keep = []
