@@ -11,7 +11,7 @@ queued 1: "keep me" (esc aborts)
 ────────────────────────────────────────────────────────────
 
 ────────────────────────────────────────────────────────────
-anthropic/claude-sonnet-4-5 | think:off | tok:10/25    | 0ms
+anthropic/claude-sonnet-4-5 | think:medium | tok:10/25 | 0ms
 > run the checks
 Let me check.
 [bash] {"command": "echo hi"}                        ok 0ms
@@ -25,4 +25,4 @@ Let me check.
 ────────────────────────────────────────────────────────────
 keep me
 ────────────────────────────────────────────────────────────
-anthropic/claude-sonnet-4-5 | think:off | tok:10/25    ready
+anthropic/claude-sonnet-4-5 | think:medium | tok:10/25 ready

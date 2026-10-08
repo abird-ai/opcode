@@ -11,7 +11,7 @@ queued 2: "queued one" (esc aborts)
 ────────────────────────────────────────────────────────────
 
 ────────────────────────────────────────────────────────────
-anthropic/claude-sonnet-4-5 | think:off | tok:10/25    | 0ms
+anthropic/claude-sonnet-4-5 | think:medium | tok:10/25 | 0ms
 [bash] {"command": "echo hi"}                        ok 0ms
  hi
  [exit 0]
@@ -25,4 +25,4 @@ Drained three.
 ────────────────────────────────────────────────────────────
 
 ────────────────────────────────────────────────────────────
-anthropic/claude-sonnet-4-5 | think:off | tok:160/37   ready
+anthropic/claude-sonnet-4-5 | think:medium | tok:160/3 ready

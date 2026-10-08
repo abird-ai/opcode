@@ -11,7 +11,7 @@
 ────────────────────────────────────────────────────────────
 Ready. Press Ctrl-C once to clear, twice to exit
 ────────────────────────────────────────────────────────────
-anthropic/claude-sonnet-4-5 | think:off | tok:0/0      ready
+anthropic/claude-sonnet-4-5 | think:medium | tok:0/0   ready
 
 
 /clear    clear the transcript view
@@ -25,7 +25,7 @@ anthropic/claude-sonnet-4-5 | think:off | tok:0/0      ready
 ────────────────────────────────────────────────────────────
 /
 ────────────────────────────────────────────────────────────
-anthropic/claude-sonnet-4-5 | think:off | tok:0/0      ready
+anthropic/claude-sonnet-4-5 | think:medium | tok:0/0   ready
 
 
 /clear    clear the transcript view
@@ -39,7 +39,7 @@ anthropic/claude-sonnet-4-5 | think:off | tok:0/0      ready
 ────────────────────────────────────────────────────────────
 /
 ────────────────────────────────────────────────────────────
-anthropic/claude-sonnet-4-5 | think:off | tok:0/0      ready
+anthropic/claude-sonnet-4-5 | think:medium | tok:0/0   ready
 # opcode
 - Enter submit, Alt+Enter newline
 - Esc abort run, Ctrl+C clear, Ctrl+D delete/quit
@@ -49,11 +49,11 @@ anthropic/claude-sonnet-4-5 | think:off | tok:0/0      ready
 - /model [id] switch model (no argument reports it)
 - /thinking [off|low|medium|high]
 - /compact compact the conversation into a summary
-- /theme [dark|light|<name>]
+- /resume /continue switch session
 ────────────────────────────────────────────────────────────
 
 ────────────────────────────────────────────────────────────
-anthropic/claude-sonnet-4-5 | think:off | tok:0/0      ready
+anthropic/claude-sonnet-4-5 | think:medium | tok:0/0   ready
 # opcode
 - Enter submit, Alt+Enter newline
 - Esc abort run, Ctrl+C clear, Ctrl+D delete/quit
@@ -63,11 +63,11 @@ anthropic/claude-sonnet-4-5 | think:off | tok:0/0      ready
 - /model [id] switch model (no argument reports it)
 - /thinking [off|low|medium|high]
 - /compact compact the conversation into a summary
-- /theme [dark|light|<name>]
+- /resume /continue switch session
 ────────────────────────────────────────────────────────────
 hello world
 ────────────────────────────────────────────────────────────
-anthropic/claude-sonnet-4-5 | think:off | tok:0/0      ready
+anthropic/claude-sonnet-4-5 | think:medium | tok:0/0   ready
 
 
 ──────────────────────────────
@@ -87,7 +87,7 @@ anthropic/claude-sonnet- ready
 ────────────────────────────────────────────────────────────
 hello world
 ────────────────────────────────────────────────────────────
-anthropic/claude-sonnet-4-5 | think:off | tok:0/0      ready
+anthropic/claude-sonnet-4-5 | think:medium | tok:0/0   ready
 > run the checks
 Let me check.
 [bash] {"command": "echo hi"}                        ok 0ms
@@ -101,4 +101,4 @@ All done.
 ────────────────────────────────────────────────────────────
 
 ────────────────────────────────────────────────────────────
-anthropic/claude-sonnet-4-5 | think:off | tok:40/29    ready
+anthropic/claude-sonnet-4-5 | think:medium | tok:40/29 ready

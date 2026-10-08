@@ -17,7 +17,7 @@
 ────────────────────────────────────────────────────────────
 
 ────────────────────────────────────────────────────────────
-anthropic/claude-sonnet-4-5 | think:off | tok:15/8     | 0ms
+anthropic/claude-sonnet-4-5 | think:medium | tok:15/8  | 0ms
 > run the checks
 [missing_tool] {}                                   err 0ms
  error: error: unknown tool:
@@ -37,7 +37,7 @@ Cards done.
 ────────────────────────────────────────────────────────────
 
 ────────────────────────────────────────────────────────────
-anthropic/claude-sonnet-4-5 | think:off | tok:35/12    ready
+anthropic/claude-sonnet-4-5 | think:medium | tok:35/12 ready
 > run the checks
 [missing_tool] {}                                   err 0ms
  error: error: unknown tool:
@@ -57,4 +57,4 @@ Cards done.
 ────────────────────────────────────────────────────────────
 
 ────────────────────────────────────────────────────────────
-anthropic/claude-sonnet-4-5 | think:off | tok:35/12    ready
+anthropic/claude-sonnet-4-5 | think:medium | tok:35/12 ready
