@@ -26,7 +26,10 @@
 .equ MCP_READ_CHUNK,  8192
 .equ F_SETFL,         4
 .equ SIGKILL,         9
+.equ SIGTERM,         15
 .equ MCP_WRITE_NS,    10000000000   # per-request write deadline (10 s)
+.equ MCP_TERM_GRACE_NS, 200000000   # SIGTERM -> SIGKILL grace (bounded, 200 ms)
+.equ MCP_TERM_POLL_NS,  5000000     # 5 ms reap poll step inside the grace
 
 # per-server state: pid, request fd (child stdin), response fd (child stdout),
 # next JSON-RPC id, partial-line buffer, sanitized name, live flag.
@@ -1359,11 +1362,7 @@ mcp_handshake:
     mov rdi, [rbx + SP_out]
     call os_close
     mov rdi, [rbx + SP_pid]
-    mov esi, SIGKILL
-    call os_kill_group
-    mov rdi, [rbx + SP_pid]
-    xor esi, esi                    # blocking: reap the child
-    call os_wait
+    call mcp_stop
     mov qword ptr [rbx + SP_pid], 0
     mov qword ptr [rbx + SP_in], 0
     mov qword ptr [rbx + SP_out], 0
@@ -1491,6 +1490,46 @@ mcp_load_file:
     xor eax, eax
     EPILOGUE
 
+# mcp_stop(pid): stop a server's process group.  SIGTERM first, then reap for
+# a short bounded grace period (WNOHANG polls, never blocks), and SIGKILL any
+# survivor before the final blocking reap.  The whole stop is deadline-bounded
+# so a wedged server cannot stall shutdown.
+mcp_stop:
+    PROLOGUE 0
+    mov rbx, rdi
+    test rbx, rbx
+    jz .Lms_stop_done
+    mov rdi, rbx
+    mov esi, SIGTERM
+    call os_kill_group
+    mov edi, CLOCK_MONOTONIC
+    call os_now_ns
+    mov r12, rax
+    add r12, MCP_TERM_GRACE_NS
+.Lms_stop_loop:
+    mov rdi, rbx
+    mov esi, 1                      # WNOHANG: non-blocking reap
+    call os_wait
+    cmp rax, -1                     # -1 running, -2 unknown/already gone
+    jne .Lms_stop_done
+    mov edi, CLOCK_MONOTONIC
+    call os_now_ns
+    cmp rax, r12
+    jae .Lms_stop_kill
+    mov edi, MCP_TERM_POLL_NS
+    call os_sleep_ns
+    jmp .Lms_stop_loop
+.Lms_stop_kill:
+    mov rdi, rbx
+    mov esi, SIGKILL
+    call os_kill_group
+    mov rdi, rbx
+    xor esi, esi                    # blocking: reap the child
+    call os_wait
+.Lms_stop_done:
+    xor eax, eax
+    EPILOGUE
+
 # mcp_handshake_range(start): handshake every server index >= start.
 mcp_handshake_range:
     PROLOGUE 0
@@ -1572,11 +1611,7 @@ FN mcp_shutdown
     mov rdi, [rbx + SP_out]
     call os_close
     mov rdi, [rbx + SP_pid]
-    mov esi, SIGKILL
-    call os_kill_group
-    mov rdi, [rbx + SP_pid]
-    xor esi, esi
-    call os_wait
+    call mcp_stop
     mov qword ptr [rbx + SP_pid], 0
 .Lmsd_next:
     mov rdi, [rbx + SP_name]
