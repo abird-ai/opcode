@@ -181,6 +181,15 @@ struct OpcodeHostV1 {
 
     /* reserved for future use; must be zero/NULL */
     void *reserved[8];
+
+    /* Appended after reserved[] so every earlier field keeps its offset.  A
+     * resources_discover handler calls this to contribute a scan root:
+     *   kind  "skills" | "prompts" | "themes"
+     *   path  absolute, <= 1024 bytes, no ".." component
+     * The host keeps at most 8 roots per kind (extra calls are dropped) and the
+     * scanners in prompt.s / theme.s read them back.  Single-threaded: call it
+     * from the handler on the main loop. */
+    void (*add_resource_root)(const char *kind, const char *path) OPCODE_SYSV;
 };
 
 /* ----------------------------------------------------------------- plugin */
@@ -199,7 +208,13 @@ typedef struct OpcodePluginV1 {
 int opcode_plugin_init(const OpcodeHostV1 *host, OpcodePluginV1 *out) OPCODE_SYSV;
 
 /* Event names (for host->on_event). Payloads documented in
- * .agents/docs/extensibility.md §3.3. */
+ * .agents/docs/extensibility.md §3.3.
+ *
+ * OPCODE_EV_RESOURCES_DISCOVER is emitted once at startup after all plugins
+ * load.  Payload:
+ *   {"cwd":"<absolute cwd>","trusted":true|false}
+ * A handler registers directories with host->add_resource_root; skills and
+ * prompt-template roots feed prompt.s, theme roots feed theme.s. */
 #define OPCODE_EV_PROJECT_TRUST         "project_trust"
 #define OPCODE_EV_RESOURCES_DISCOVER    "resources_discover"
 #define OPCODE_EV_SESSION_START         "session_start"

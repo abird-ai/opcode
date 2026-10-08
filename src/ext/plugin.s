@@ -116,8 +116,10 @@ FN plugins_init
     call log_cstr
     jmp .Lpi_next
 .Lpi_done:
+    call resources_discover_emit  # once, after every handler is registered
     mov rax, r14
     EPILOGUE
 .Lpi_ret:
+    call resources_discover_emit
     xor eax, eax
     EPILOGUE

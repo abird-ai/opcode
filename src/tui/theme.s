@@ -6,6 +6,7 @@
 # Resolution order for `/theme <name>`:
 #   * built-in "dark"/"light"/"system" (system reads $COLORFGBG),
 #   * <name>.jsonc under the trusted project's .opcode/themes,
+#   * <name>.jsonc under a resources_discover "themes" root,
 #   * <name>.jsonc under <config dir>/themes.
 # The effective base is built-in -> <config>/theme.jsonc "base" -> named file
 # "base"; config slots are applied next, then the named file's slots, so the
@@ -92,6 +93,8 @@ theme_slot_names:
 .Ls_theme_jsonc: .asciz "/theme.jsonc"
 .Ls_themes_slash: .asciz "/themes/"
 .Ls_opcode_themes: .asciz "/.opcode/themes/"
+.Ls_slash:     .asciz "/"
+.Ls_kind_themes: .asciz "themes"
 .Ls_colorterm: .asciz "COLORTERM"
 .Ls_term:      .asciz "TERM"
 .Ls_colorfgbg: .asciz "COLORFGBG"
@@ -631,6 +634,7 @@ FN theme_join_copy
 # theme_resolve_named(name rdi, out rsi, cap edx) -> eax 1 path found | 0.
 FN theme_resolve_named
     PROLOGUE 32
+    call resources_discover_emit
     mov r12, rdi
     mov r13, rsi
     mov r14d, edx
@@ -640,10 +644,10 @@ FN theme_resolve_named
     jz .Lrn_no
     # trusted project: <cwd>/.opcode/themes/<name>.jsonc
     cmp dword ptr [rip + g_theme_trusted], 0
-    je .Lrn_cfg
+    je .Lrn_roots
     mov rax, [rip + g_theme_proj]
     test rax, rax
-    jz .Lrn_cfg
+    jz .Lrn_roots
     lea rdi, [rip + theme_sb]
     call sb_clear
     lea rdi, [rip + theme_sb]
@@ -662,6 +666,42 @@ FN theme_resolve_named
     call theme_is_file
     test eax, eax
     jnz .Lrn_copy
+    # resources_discover roots: <root>/<name>.jsonc
+.Lrn_roots:
+    lea rdi, [rip + .Ls_kind_themes]
+    call resources_root_count
+    mov [rsp], rax
+    mov qword ptr [rsp + 8], 0
+.Lrn_root_loop:
+    mov rax, [rsp + 8]
+    cmp rax, [rsp]
+    jae .Lrn_cfg
+    lea rdi, [rip + .Ls_kind_themes]
+    mov rsi, rax
+    call resources_root_at
+    test rax, rax
+    jz .Lrn_cfg
+    mov r15, rax
+    lea rdi, [rip + theme_sb]
+    call sb_clear
+    lea rdi, [rip + theme_sb]
+    mov rsi, r15
+    call sb_push_cstr
+    lea rdi, [rip + theme_sb]
+    lea rsi, [rip + .Ls_slash]
+    call sb_push_cstr
+    lea rdi, [rip + theme_sb]
+    mov rsi, r12
+    call sb_push_cstr
+    lea rdi, [rip + theme_sb]
+    lea rsi, [rip + .Ls_jsonc]
+    call sb_push_cstr
+    mov rdi, [rip + theme_sb + SB_ptr]
+    call theme_is_file
+    test eax, eax
+    jnz .Lrn_copy
+    inc qword ptr [rsp + 8]
+    jmp .Lrn_root_loop
 .Lrn_cfg:
     call config_user_dir
     test rax, rax

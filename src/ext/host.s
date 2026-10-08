@@ -14,11 +14,16 @@
 #   - is_cancelled always returns 0; http_request/http_cancel return 0 (M7).
 #   - register_tool wraps the plugin tool in an internal TL and completes
 #     synchronously; OPCODE_TOOL_THREADSAFE is not honoured by the M6 loader.
+#     Its prompt_snippet/prompt_guidelines are copied into the appended
+#     TL_snippet/TL_guidelines fields (TL_PROMPT set) for prompt_build.
 #   - events/commands are recorded in static tables (opcode_host_events /
-#     opcode_host_commands + counts) for the later wiring milestone.
+#     opcode_host_commands + counts).  plugins_init() emits resources_discover
+#     once after all plugins load; handlers contribute directories through
+#     add_resource_root (absolute, no "..", <= 8 roots/kind), which prompt.s
+#     and theme.s scan.  Other events are still recorded only.
 
 .equ OPCODE_HOST_ABI,  1
-.equ OPCODE_HOST_SIZE, 280
+.equ OPCODE_HOST_SIZE, 288
 
 # OpcodeToolV1 field offsets (C header)
 .equ FT_flags,   4
@@ -26,8 +31,16 @@
 .equ FT_label,   16
 .equ FT_desc,    24
 .equ FT_params,  32
+.equ FT_snippet, 40
+.equ FT_guidelines, 48
 .equ FT_execute, 56
 .equ FT_SIZE,    72
+
+# resources_discover registry: bounded at RR_MAX roots per kind
+# (0=skills, 1=prompts, 2=themes).
+.equ RR_MAX,     8
+.equ RR_KINDS,   3
+.equ RR_PATHMAX, 1024
 
 # OpcodePluginV1 field offsets
 .equ FP_abi,     0
@@ -49,10 +62,28 @@
 .p2align 3
 .Llevels: .quad .Llevel_debug, .Llevel_info, .Llevel_warn, .Llevel_error
 
+# resources_discover event + payload fragments (see the header comment)
+.Lrr_ev_name:     .asciz "resources_discover"
+.Lrr_k_skills:    .asciz "skills"
+.Lrr_k_prompts:   .asciz "prompts"
+.Lrr_k_themes:    .asciz "themes"
+.Lrr_payload_pre: .asciz "{\"cwd\":\""
+.Lrr_payload_mid: .asciz "\",\"trusted\":"
+.Lrr_true:        .asciz "true"
+.Lrr_false:       .asciz "false"
+.Lrr_payload_end: .asciz "}"
+
 .section .bss
 .p2align 3
 .Lcwd_buf: .zero 4096
 .Lkeybuf:  .zero 256
+
+# resources_discover state: one JSON payload scratch + a count and bounded
+# path table per kind.  A root path is a NUL-terminated absolute directory.
+rr_payload:   .zero SB_SIZE
+rr_emitted:   .zero 8
+rr_counts:    .zero RR_KINDS * 8
+rr_roots:     .zero RR_KINDS * RR_MAX * RR_PATHMAX
 
 # event registrations: {name, handler, userdata} (24 bytes each), for later wiring
 .globl opcode_host_events
@@ -264,8 +295,13 @@ host_register_tool:
     mov [rbx + TL_desc], rax
     mov rax, [r12 + FT_params]
     mov [rbx + TL_params], rax
+    mov rax, [r12 + FT_snippet]
+    mov [rbx + TL_snippet], rax
+    mov rax, [r12 + FT_guidelines]
+    mov [rbx + TL_guidelines], rax
     mov eax, [r12 + FT_flags]
     and eax, TL_READONLY | TL_SEQUENTIAL | TL_DESTRUCTIVE
+    or eax, TL_PROMPT
     mov [rbx + TL_flags], eax
     lea rax, [rip + host_ptool_exec]
     mov [rbx + TL_exec], rax
@@ -395,6 +431,262 @@ host_on_event:
     inc rax
     mov [rip + opcode_host_event_count], rax
 1:  ret
+
+# ------------------------------------------------------- resource discovery
+# resources_discover handlers contribute directories through
+# host_add_resource_root.  Kinds map to fixed slots (0=skills, 1=prompts,
+# 2=themes); a path must be absolute and free of ".." components, and at most
+# RR_MAX per kind are kept (later duplicates beyond that are dropped).
+# resources_root_count/_at expose the table to the scanners in prompt.s and
+# theme.s.  See include/opcode_plugin.h for the payload shape.
+
+# rr_streq(a cstr, b cstr) -> 1 | 0
+rr_streq:
+1:  mov al, [rdi]
+    cmp al, [rsi]
+    jne 2f
+    test al, al
+    jz 3f
+    inc rdi
+    inc rsi
+    jmp 1b
+2:  xor eax, eax
+    ret
+3:  mov eax, 1
+    ret
+
+# rr_kind_index(kind cstr) -> eax 0 skills | 1 prompts | 2 themes | -1
+rr_kind_index:
+    PROLOGUE
+    test rdi, rdi
+    jz .Lrki_no
+    mov r12, rdi
+    mov rdi, r12
+    lea rsi, [rip + .Lrr_k_skills]
+    call rr_streq
+    test eax, eax
+    jnz .Lrki_0
+    mov rdi, r12
+    lea rsi, [rip + .Lrr_k_prompts]
+    call rr_streq
+    test eax, eax
+    jnz .Lrki_1
+    mov rdi, r12
+    lea rsi, [rip + .Lrr_k_themes]
+    call rr_streq
+    test eax, eax
+    jnz .Lrki_2
+.Lrki_no:
+    mov eax, -1
+    EPILOGUE
+.Lrki_0:
+    xor eax, eax
+    EPILOGUE
+.Lrki_1:
+    mov eax, 1
+    EPILOGUE
+.Lrki_2:
+    mov eax, 2
+    EPILOGUE
+
+# rr_path_ok(path cstr) -> eax 1 | 0: absolute and no ".." component
+rr_path_ok:
+    test rdi, rdi
+    jz .Lrpo_no
+    cmp byte ptr [rdi], '/'
+    jne .Lrpo_no
+    xor ecx, ecx                   # component start
+    xor edx, edx                   # scan index
+.Lrpo_loop:
+    movzx eax, byte ptr [rdi + rdx]
+    test al, al
+    jz .Lrpo_end
+    cmp al, '/'
+    je .Lrpo_sep
+    inc rdx
+    jmp .Lrpo_loop
+.Lrpo_sep:
+    mov rax, rdx
+    sub rax, rcx
+    cmp rax, 2
+    jne .Lrpo_next
+    cmp byte ptr [rdi + rcx], '.'
+    jne .Lrpo_next
+    cmp byte ptr [rdi + rcx + 1], '.'
+    je .Lrpo_no
+.Lrpo_next:
+    lea rcx, [rdx + 1]
+    inc rdx
+    jmp .Lrpo_loop
+.Lrpo_end:
+    mov rax, rdx
+    sub rax, rcx
+    cmp rax, 2
+    jne .Lrpo_yes
+    cmp byte ptr [rdi + rcx], '.'
+    jne .Lrpo_yes
+    cmp byte ptr [rdi + rcx + 1], '.'
+    je .Lrpo_no
+.Lrpo_yes:
+    mov eax, 1
+    ret
+.Lrpo_no:
+    xor eax, eax
+    ret
+
+# add_resource_root(kind, path) — the host call a resources_discover handler uses
+host_add_resource_root:
+    PROLOGUE
+    mov r12, rdi
+    mov r13, rsi
+    mov rdi, r13
+    call rr_path_ok
+    test eax, eax
+    jz .Lrra_done
+    mov rdi, r12
+    call rr_kind_index
+    test eax, eax
+    js .Lrra_done
+    mov r14, rax
+    mov rdi, r13
+    call strlen
+    mov rbx, rax
+    cmp rbx, RR_PATHMAX
+    jae .Lrra_done
+    lea rcx, [rip + rr_counts]
+    mov r15, [rcx + r14*8]
+    cmp r15, RR_MAX
+    jae .Lrra_done
+    mov rax, r14
+    imul rax, rax, RR_MAX
+    add rax, r15
+    imul rax, rax, RR_PATHMAX
+    lea r12, [rip + rr_roots]
+    add r12, rax
+    mov rdi, r12
+    mov rsi, r13
+    mov rdx, rbx
+    call memcpy
+    mov byte ptr [r12 + rbx], 0
+    inc r15
+    lea rcx, [rip + rr_counts]
+    mov [rcx + r14*8], r15
+.Lrra_done:
+    xor eax, eax
+    EPILOGUE
+
+# resources_root_count(kind cstr) -> count (0 for an unknown kind)
+FN resources_root_count
+    PROLOGUE
+    call rr_kind_index
+    test eax, eax
+    js .Lrrc_zero
+    lea rcx, [rip + rr_counts]
+    mov rax, [rax + rcx]
+    EPILOGUE
+.Lrrc_zero:
+    xor eax, eax
+    EPILOGUE
+
+# resources_root_at(kind cstr, index) -> cstr | 0
+FN resources_root_at
+    PROLOGUE
+    mov r12, rsi
+    call rr_kind_index
+    test eax, eax
+    js .Lrrat_no
+    lea rcx, [rip + rr_counts]
+    mov rdx, [rcx + rax*8]
+    cmp r12, rdx
+    jae .Lrrat_no
+    imul rax, rax, RR_MAX
+    add rax, r12
+    imul rax, rax, RR_PATHMAX
+    lea rdx, [rip + rr_roots]
+    add rax, rdx
+    EPILOGUE
+.Lrrat_no:
+    xor eax, eax
+    EPILOGUE
+
+# resources_discover_emit() -> handlers called.  Runs the resources_discover
+# handlers once with {"cwd":...,"trusted":...}; later calls are a no-op.  A
+# call before any handler is registered leaves the emitter unmarked so a later
+# startup pass still delivers the event.
+FN resources_discover_emit
+    PROLOGUE
+    cmp qword ptr [rip + rr_emitted], 0
+    jne .Lrde_zero
+    mov r12, [rip + opcode_host_event_count]
+    test r12, r12
+    jz .Lrde_zero
+    lea rdi, [rip + rr_payload]
+    call sb_clear
+    lea rdi, [rip + rr_payload]
+    lea rsi, [rip + .Lrr_payload_pre]
+    call sb_push_cstr
+    call host_cwd
+    test rax, rax
+    jz .Lrde_mid
+    mov rdi, rax
+    call host_json_escape
+    test rax, rax
+    jz .Lrde_mid
+    mov r13, rax
+    lea rdi, [rip + rr_payload]
+    mov rsi, r13
+    call sb_push_cstr
+    mov rdi, r13
+    call mem_free
+.Lrde_mid:
+    lea rdi, [rip + rr_payload]
+    lea rsi, [rip + .Lrr_payload_mid]
+    call sb_push_cstr
+    call host_cwd
+    test rax, rax
+    jz .Lrde_true
+    mov rdi, rax
+    call config_trusted
+    test eax, eax
+    jz .Lrde_false
+.Lrde_true:
+    lea rsi, [rip + .Lrr_true]
+    jmp .Lrde_trust
+.Lrde_false:
+    lea rsi, [rip + .Lrr_false]
+.Lrde_trust:
+    lea rdi, [rip + rr_payload]
+    call sb_push_cstr
+    lea rdi, [rip + rr_payload]
+    lea rsi, [rip + .Lrr_payload_end]
+    call sb_push_cstr
+    xor r13d, r13d
+.Lrde_loop:
+    cmp r13, r12
+    jae .Lrde_done
+    lea rax, [rip + opcode_host_events]
+    lea rcx, [r13 + r13*2]
+    lea r14, [rax + rcx*8]
+    mov rdi, [r14]
+    lea rsi, [rip + .Lrr_ev_name]
+    call rr_streq
+    test eax, eax
+    jz .Lrde_next
+    mov rdi, [r14 + 16]
+    mov rsi, [rip + rr_payload + SB_ptr]
+    call qword ptr [r14 + 8]
+.Lrde_next:
+    inc r13
+    jmp .Lrde_loop
+.Lrde_done:
+    mov qword ptr [rip + rr_emitted], 1
+    lea rdi, [rip + rr_payload]
+    call sb_free
+    mov rax, r13
+    EPILOGUE
+.Lrde_zero:
+    xor eax, eax
+    EPILOGUE
 
 # ------------------------------------------------------------------ json
 # json_get_str(json, path, dflt) -> cstr | dflt
@@ -625,6 +917,7 @@ opcode_host_v1:
     .quad host_http_request     # http_request
     .quad host_http_cancel      # http_cancel
     .zero 64                    # reserved[8]
+    .quad host_add_resource_root # add_resource_root (appended)
 
 .text
 # opcode_host() -> OpcodeHostV1*

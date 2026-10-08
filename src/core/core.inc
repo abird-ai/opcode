@@ -147,6 +147,10 @@ ENDSTRUCT PV_SIZE
 .equ TL_READONLY,    1
 .equ TL_SEQUENTIAL,  2
 .equ TL_DESTRUCTIVE, 4
+# TL_PROMPT marks the appended TL_snippet/TL_guidelines pointers as valid.
+# Built-in and MCP descriptors leave it clear (and their static tables end at
+# TL_finish), so prompt_build never reads past them.
+.equ TL_PROMPT,      8
 
 .equ MF_ERROR, 1
 .equ JF_ERROR, 1
@@ -165,7 +169,11 @@ F TL_flags, 4
 F TL_pad, 4
 F TL_exec, 8                # (Job*) -> 0|-errno
 F TL_finish, 8              # (Job*) -> 0; called at child EOF (may be 0)
-ENDSTRUCT TL_SIZE           # 48
+# Appended (ABI append-only): plugin prompt text. Only valid when TL_flags has
+# TL_PROMPT; the built-in static tables end at TL_finish and never set it.
+F TL_snippet, 8             # cstr one-line "# Tools" entry (0 = generic line)
+F TL_guidelines, 8          # cstr newline-separated "# Rules" bullets (0 = none)
+ENDSTRUCT TL_SIZE           # 72
 
 STRUCT
 F J_tool, 8                 # TL*

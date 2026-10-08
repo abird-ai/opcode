@@ -10,6 +10,9 @@
 #   (<available_skills>), "# Environment" (cwd + platform + date). Output ends
 #   with "\n".  The environment block stays last because cwd, platform and the
 #   UTC date are the turn-varying facts (ADR-8/T3, ADR-12).
+#   A plugin TL with TL_PROMPT uses its TL_snippet for the "# Tools" line and
+#   contributes its TL_guidelines as "# Rules" bullets; built-ins (no
+#   TL_PROMPT) keep the generic name: description line and no bullets.
 # prompt_templates_init() -> 0
 # prompt_template_expand(name cstr, args cstr, out SB*) -> 0|-ENOENT
 #
@@ -17,6 +20,11 @@
 # context files (AGENTS.override.md, AGENTS.md, OPCODE.md, CLAUDE.md) are not
 # trust-gated. Unknown/unreadable files are skipped silently. Single-threaded:
 # scan tables and scratch paths are static and reused per call.
+#
+# resources_discover roots (host.s) are scanned in addition to the built-in
+# config/project directories by the skill and prompt-template scanners;
+# resources_discover_emit() is called lazily here so a plugin that registered
+# handlers still contributes roots if this runs before plugins_init().
 
 .equ PC_PATHMAX,    8192
 .equ PC_FMMAX,      8192
@@ -92,6 +100,7 @@ GSIZE g_prompt_date, 8
 .LS_tools:       .asciz "\n# Tools\n"
 .LS_colon:       .asciz ": "
 .LS_nl:          .asciz "\n"
+.LS_bullet:      .asciz "- "
 .LS_rules:
     .ascii "\n# Rules\n"
     .ascii "- Prefer the provided tools over guessing; never invent tool output.\n"
@@ -639,6 +648,84 @@ LFN pc_ensure_nl
     jmp sb_push_byte
 1:  xor eax, eax
     ret
+
+# pc_emit_guidelines(sb, text cstr): append each non-empty line of `text` as a
+# "- <line>\n" bullet.  A trailing "\r" is trimmed and empty lines are
+# skipped, so a newline-separated plugin blob becomes clean Rules bullets.
+LFN pc_emit_guidelines
+    PROLOGUE
+    mov r12, rdi                    # sb
+    mov r13, rsi                    # text cursor
+.Lpg_loop:
+    cmp byte ptr [r13], 0
+    je .Lpg_done
+    mov r14, r13
+.Lpg_scan:
+    movzx eax, byte ptr [r14]
+    test al, al
+    jz .Lpg_line
+    cmp al, 10
+    je .Lpg_line
+    inc r14
+    jmp .Lpg_scan
+.Lpg_line:
+    mov r15, r14
+    sub r15, r13                    # line length
+    test r15, r15
+    jz .Lpg_adv
+    cmp byte ptr [r13 + r15 - 1], 13
+    jne .Lpg_emit
+    dec r15
+.Lpg_emit:
+    test r15, r15
+    jz .Lpg_adv
+    mov rdi, r12
+    lea rsi, [rip + .LS_bullet]
+    call sb_push_cstr
+    mov rdi, r12
+    mov rsi, r13
+    mov rdx, r15
+    call sb_push
+    mov rdi, r12
+    lea rsi, [rip + .LS_nl]
+    call sb_push_cstr
+.Lpg_adv:
+    mov r13, r14
+    cmp byte ptr [r13], 0
+    je .Lpg_done
+    inc r13
+    jmp .Lpg_loop
+.Lpg_done:
+    xor eax, eax
+    EPILOGUE
+
+# pc_scan_roots(kind cstr, cb, unused): scan every resources_discover root of
+# `kind` with pc_scan_dir, passing the root as the callback context (the dir).
+LFN pc_scan_roots
+    PROLOGUE
+    mov r12, rdi                    # kind
+    mov r13, rsi                    # cb
+    mov rdi, r12
+    call resources_root_count
+    mov r15, rax
+    xor r14d, r14d
+.Lpr_loop:
+    cmp r14, r15
+    jae .Lpr_done
+    mov rdi, r12
+    mov rsi, r14
+    call resources_root_at
+    test rax, rax
+    jz .Lpr_done
+    mov rdi, rax
+    mov rsi, r13
+    mov rdx, rax
+    call pc_scan_dir
+    inc r14
+    jmp .Lpr_loop
+.Lpr_done:
+    xor eax, eax
+    EPILOGUE
 
 # ------------------------------------------------------------------ file loading
 
@@ -1834,6 +1921,7 @@ FN prompt_build
     jnz .Lpb_cwd
     lea r14, [rip + .LS_empty]
 .Lpb_cwd:
+    call resources_discover_emit
     call pc_config_home
     mov [rsp + 8], rax
     mov rdi, r14
@@ -1872,6 +1960,18 @@ FN prompt_build
     mov rax, [r15 + rbx*8]
     test rax, rax
     jz .Lpb_next
+    test dword ptr [rax + TL_flags], TL_PROMPT
+    jz .Lpb_generic
+    mov rsi, [rax + TL_snippet]
+    test rsi, rsi
+    jz .Lpb_generic
+    mov rdi, r12
+    call sb_push_cstr
+    mov rdi, r12
+    lea rsi, [rip + .LS_nl]
+    call sb_push_cstr
+    jmp .Lpb_next
+.Lpb_generic:
     mov rsi, [rax + TL_name]
     test rsi, rsi
     jnz .Lpb_name
@@ -1901,6 +2001,30 @@ FN prompt_build
     mov rdi, r12
     lea rsi, [rip + .LS_rules]
     call sb_push_cstr
+    # plugin prompt_guidelines -> extra "# Rules" bullets
+    test r13, r13
+    jz .Lpb_rules_done
+    mov r15, [r13 + VEC_ptr]
+    test r15, r15
+    jz .Lpb_rules_done
+    xor ebx, ebx
+.Lpb_gl_loop:
+    cmp rbx, [r13 + VEC_len]
+    jae .Lpb_rules_done
+    mov rax, [r15 + rbx*8]
+    test rax, rax
+    jz .Lpb_gl_next
+    test dword ptr [rax + TL_flags], TL_PROMPT
+    jz .Lpb_gl_next
+    mov rsi, [rax + TL_guidelines]
+    test rsi, rsi
+    jz .Lpb_gl_next
+    mov rdi, r12
+    call pc_emit_guidelines
+.Lpb_gl_next:
+    inc rbx
+    jmp .Lpb_gl_loop
+.Lpb_rules_done:
     # 4. addendum: config first, then the trusted project copy
     mov rax, [rsp + 8]
     test rax, rax
@@ -1971,6 +2095,10 @@ FN prompt_build
     lea rdx, [rip + pc_dir_buf]
     call pc_scan_dir
 .Lpb_sk_emit:
+    lea rdi, [rip + .LS_skills]
+    lea rsi, [rip + pc_skill_cb]
+    xor edx, edx
+    call pc_scan_roots
     mov rdi, r12
     call pc_skills_emit
     # 7. environment (kept last: cwd and platform are the turn-varying facts)
@@ -2029,6 +2157,7 @@ FN prompt_build
 
 FN prompt_templates_init
     PROLOGUE
+    call resources_discover_emit
     # release a previously built table
     xor ebx, ebx
 .Lti_free:
@@ -2083,6 +2212,10 @@ FN prompt_templates_init
     lea rdx, [rip + pc_dir_buf]
     call pc_scan_dir
 .Lti_done:
+    lea rdi, [rip + .LS_prompts]
+    lea rsi, [rip + pc_tpl_cb]
+    xor edx, edx
+    call pc_scan_roots
     xor eax, eax
     EPILOGUE
 
@@ -2147,6 +2280,7 @@ FN prompt_template_expand
 # prompt_build (pc_skill_cb); any previous table is freed first.
 FN skills_list
     PROLOGUE 16
+    call resources_discover_emit
     call pc_skills_reset
     call pc_config_home
     mov r12, rax
@@ -2183,6 +2317,10 @@ FN skills_list
     lea rdx, [rip + pc_dir_buf]
     call pc_scan_dir
 .Lsl_done:
+    lea rdi, [rip + .LS_skills]
+    lea rsi, [rip + pc_skill_cb]
+    xor edx, edx
+    call pc_scan_roots
     call pc_skills_sort
     mov rax, [rip + pc_sk_count]
     EPILOGUE
