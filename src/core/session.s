@@ -55,7 +55,7 @@
 .Lenv_xdg:         .asciz "XDG_DATA_HOME"
 .Lenv_home:        .asciz "HOME"
 .Lsub_local:       .asciz "/.local/share"
-.Lsub_opcode:      .asciz "/opcode/sessions/--"
+.Lsub_opcode:      .asciz "/abird/opcode/sessions/--"
 .Lsub_dashes:      .asciz "--"
 
 # keys

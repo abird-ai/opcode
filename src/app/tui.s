@@ -231,8 +231,8 @@
 .Ltermenv:   .asciz "TERM"
 .Ldumb:      .asciz "dumb"
 .Lopcode_ascii: .asciz "OPCODE_ASCII"
-.Lpath_xdg:  .asciz "/opcode/history"
-.Lpath_home: .asciz "/.local/state/opcode/history"
+.Lpath_xdg:  .asciz "/abird/opcode/history"
+.Lpath_home: .asciz "/.local/state/abird/opcode/history"
 .Lerr_script:  .asciz "opcode: cannot read script: "
 .Lhint_auth:
     .ascii "opcode: hint: 'opcode login <provider>' stores a subscription token,\n"
@@ -569,8 +569,8 @@ FN tui_mkdir_p
 .Lmp_done:
     EPILOGUE
 
-# tui_history_setup(): resolve $XDG_STATE_HOME/opcode/history else
-# $HOME/.local/state/opcode/history, create its parent directories and record it.
+# tui_history_setup(): resolve $XDG_STATE_HOME/abird/opcode/history else
+# $HOME/.local/state/abird/opcode/history, create its parent directories and record it.
 FN tui_history_setup
     PROLOGUE 0
     lea rdi, [rip + .Lxdg]

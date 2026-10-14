@@ -19,9 +19,9 @@ contains() {
 
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
-mkdir -p "$tmp/cfg/opcode"
+mkdir -p "$tmp/cfg/abird/opcode"
 log="$tmp/mock.log"
-cat > "$tmp/cfg/opcode/mcp.jsonc" <<EOF
+cat > "$tmp/cfg/abird/opcode/mcp.jsonc" <<EOF
 {"servers":{"mock":{"command":"python3",
   "args":["$PWD/tests/mock_mcp.py"],
   "env":{"MCP_MOCK_LOG":"$log"}}}}
@@ -45,8 +45,8 @@ contains mcp-no-config "Simple answer." "$out"
 
 # an MCP server that exits immediately must yield an error, not SIGPIPE-kill
 # opcode (the request write hits a closed pipe during the handshake)
-mkdir -p "$tmp/deadcfg/opcode"
-cat > "$tmp/deadcfg/opcode/mcp.jsonc" <<EOF
+mkdir -p "$tmp/deadcfg/abird/opcode"
+cat > "$tmp/deadcfg/abird/opcode/mcp.jsonc" <<EOF
 {"servers":{"mock":{"command":"sh","args":["-c","exit 0"],"env":{}}}}
 EOF
 rc=0

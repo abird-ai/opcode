@@ -231,8 +231,8 @@ tools, custom providers or dynamic loading) are documented in
 
 All files are JSONC (comments and trailing commas; unknown keys are ignored):
 
-- **User config** — `$XDG_CONFIG_HOME/opcode/config.jsonc` (default
-  `~/.config/opcode/config.jsonc`).
+- **User config** — `$XDG_CONFIG_HOME/abird/opcode/config.jsonc` (default
+  `~/.config/abird/opcode/config.jsonc`).
 - **Project config** — `<cwd>/.opcode/config.jsonc`, loaded only when the
   directory is trusted: `--approve`, an interactive `trust this directory?
   [y/N]` prompt in a TTY TUI (saved to `trust.jsonc`), or an existing
@@ -241,7 +241,7 @@ All files are JSONC (comments and trailing commas; unknown keys are ignored):
   `session_dir`, `theme`, `default_thinking`, `providers.<id>.base_url`,
   `api_keys.<id>`.
 - **Sessions** — `$OPCODE_SESSION_DIR`, else config `session_dir`, else
-  `$XDG_DATA_HOME/opcode/sessions/--<sanitized-cwd>--/`; one JSONL entry per
+  `$XDG_DATA_HOME/abird/opcode/sessions/--<sanitized-cwd>--/`; one JSONL entry per
   line, `--continue`/`--resume`/`--session`/`--session-dir`/`--no-session`.
 - **Context files** — `AGENTS.override.md`, `AGENTS.md`, `OPCODE.md`,
   `CLAUDE.md` from the config dir and every cwd ancestor; `SYSTEM.md` replaces

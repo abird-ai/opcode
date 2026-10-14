@@ -51,8 +51,8 @@ contains models-ollama "ollama/llama3.2 (builtin)" "$out"
 contains models-cloud "ollama-cloud/gpt-oss:120b (builtin)" "$out"
 
 # 2. discovered cache from models.jsonc is listed as (discovered), builtins kept.
-mkdir -p "$TMP/xdg/opcode"
-cat > "$TMP/xdg/opcode/models.jsonc" <<'EOF'
+mkdir -p "$TMP/xdg/abird/opcode"
+cat > "$TMP/xdg/abird/opcode/models.jsonc" <<'EOF'
 {"models":[{"id":"qwen3:8b","name":"Qwen3 8B","api":"openai-chat","provider":"ollama",
   "base":"http://127.0.0.1:11434/v1","context_window":0,"max_tokens":0,
   "reasoning":false,"image":false,"no_key":true}]}
@@ -79,9 +79,9 @@ out=$(env -i HOME="$TMP/nohome" PATH="$PATH" OPENAI_API_KEY=test \
 not_contains onboard-envkey "no provider is configured" "$out"
 
 # 5. config default_provider/default_model resolves a provider: no onboarding.
-mkdir -p "$TMP/cfg/opcode"
+mkdir -p "$TMP/cfg/abird/opcode"
 printf '{"default_provider":"anthropic","default_model":"claude-haiku-4-5"}\n' \
-    > "$TMP/cfg/opcode/config.jsonc"
+    > "$TMP/cfg/abird/opcode/config.jsonc"
 rc=0
 out=$(env -i HOME="$TMP/nohome" XDG_CONFIG_HOME="$TMP/cfg" PATH="$PATH" \
         ./build/opcode -p "hi" --replay tests/data/agent_replay.wire --no-session 2>&1) || rc=$?
@@ -194,7 +194,7 @@ def drain(master, timeout):
 
 # --- provider picker choice 1, model picker default: config_save merges -------
 home = os.path.join(TMP, "pty-home")
-cfgdir = os.path.join(home, ".config", "opcode")
+cfgdir = os.path.join(home, ".config", "abird", "opcode")
 os.makedirs(cfgdir)
 cfg = os.path.join(cfgdir, "config.jsonc")
 sess = os.path.join(TMP, "pty-sessions")

@@ -10,7 +10,7 @@ cd "$(dirname "$0")/.."
 [ -f tests/data/agent_replay_hostile.wire ] || python3 tests/gen_agent_replay.py
 [ -f tests/data/agent_replay_scroll.wire ] || python3 tests/gen_agent_replay.py
 
-# A developer/user config (e.g. ~/.config/opcode/config.jsonc) can pin
+# A developer/user config (e.g. ~/.config/abird/opcode/config.jsonc) can pin
 # default_provider/default_model and silently override --provider, and a
 # state dir can seed the editor history.  Isolate both in fresh temp dirs so
 # the golden is the same here and in CI.

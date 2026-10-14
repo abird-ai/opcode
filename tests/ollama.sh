@@ -108,7 +108,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-mkdir -p "$tmp/cfg/opcode"
+mkdir -p "$tmp/cfg/abird/opcode"
 export XDG_CONFIG_HOME="$tmp/cfg"
 export OLLAMA_LOG="$tmp/ollama.log"
 
@@ -156,7 +156,7 @@ if grep -q '^GET /api/tags' "$tmp/ollama.log"; then
 else
     echo "discover primary endpoint ok"
 fi
-if [ -f "$tmp/cfg/opcode/models.jsonc" ] && python3 - "$tmp/cfg/opcode/models.jsonc" <<'PY'
+if [ -f "$tmp/cfg/abird/opcode/models.jsonc" ] && python3 - "$tmp/cfg/abird/opcode/models.jsonc" <<'PY'
 import json, sys
 with open(sys.argv[1]) as handle:
     data = json.load(handle)
@@ -187,7 +187,7 @@ done
 port2=$(cat "$tmp/port2")
 
 export XDG_CONFIG_HOME="$tmp/cfg2"
-mkdir -p "$tmp/cfg2/opcode"
+mkdir -p "$tmp/cfg2/abird/opcode"
 rc=0
 out=$(timeout "$to" env -u OLLAMA_API_KEY $EMULATOR "./$live" "http://127.0.0.1:$port2/v1" 2>&1) || rc=$?
 check discover-fallback-rc 0 "$rc"
@@ -196,7 +196,7 @@ require "discover fallback tried /v1/models" \
     "GET /v1/models endpoint=models auth=$" "$(cat "$tmp/ollama_fallback.log")"
 require "discover fallback used /api/tags" \
     "GET /api/tags endpoint=tags auth=$" "$(cat "$tmp/ollama_fallback.log")"
-if [ -f "$tmp/cfg2/opcode/models.jsonc" ] && python3 - "$tmp/cfg2/opcode/models.jsonc" <<'PY'
+if [ -f "$tmp/cfg2/abird/opcode/models.jsonc" ] && python3 - "$tmp/cfg2/abird/opcode/models.jsonc" <<'PY'
 import json, sys
 with open(sys.argv[1]) as handle:
     data = json.load(handle)

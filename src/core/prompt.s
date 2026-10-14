@@ -130,7 +130,7 @@ GSIZE g_prompt_date, 8
 .LS_xdg:         .asciz "XDG_CONFIG_HOME"
 .LS_home:        .asciz "HOME"
 .LS_dotcfg:      .asciz ".config"
-.LS_opcode:      .asciz "opcode"
+.LS_opcode:      .asciz "abird/opcode"
 
 .text
 
@@ -177,8 +177,8 @@ LFN pc_getenv
     xor eax, eax
     ret
 
-# pc_config_home() -> cstr | 0: g_config_home, else $XDG_CONFIG_HOME/opcode,
-# else $HOME/.config/opcode. The computed path lives in pc_home_buf.
+# pc_config_home() -> cstr | 0: g_config_home, else $XDG_CONFIG_HOME/abird/opcode,
+# else $HOME/.config/abird/opcode. The computed path lives in pc_home_buf.
 LFN pc_config_home
     mov rax, [rip + g_config_home]
     test rax, rax

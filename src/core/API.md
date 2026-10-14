@@ -160,7 +160,7 @@ against a provider `PV_finish` `SE_DONE`), then leaves the state at `AS_DONE`
 One JSON object per line, snake_case keys, tagged by `"type"`. All timestamps are
 Unix milliseconds (integers). File name: `<unix_ms>_<id8>.jsonl`.
 Location: `$OPCODE_SESSION_DIR`, else config `session_dir`, else
-`$XDG_DATA_HOME/opcode/sessions/--<sanitized-cwd>--/` (sanitize `/` and `\\` to `-`).
+`$XDG_DATA_HOME/abird/opcode/sessions/--<sanitized-cwd>--/` (sanitize `/` and `\\` to `-`).
 
 ```jsonc
 {"type":"session","schema_version":1,"id":"a1b2c3d4","timestamp":1759000000000,"cwd":"/home/u/proj"}
@@ -233,7 +233,7 @@ g_config_interactive: .quad        # app sets 1 for an interactive TTY TUI
 ```
 `config_load()` calls `config_trust_ask(cwd)` before `config_trusted(cwd)`, so a
 `y` answer takes effect for that same load.
-Paths: `$XDG_CONFIG_HOME/opcode/config.jsonc` (default `~/.config/opcode`), project
+Paths: `$XDG_CONFIG_HOME/abird/opcode/config.jsonc` (default `~/.config/abird/opcode`), project
 `<cwd>/.opcode/config.jsonc`; trust file `<config>/trust.jsonc` with
 `{"trusted":["/abs/cwd", ...]}`. Unknown keys are ignored.
 

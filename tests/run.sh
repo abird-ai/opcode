@@ -12,7 +12,7 @@ set -e
 cd "$(dirname "$0")/.."
 
 # Hermeticity: every suite runs with isolated config/state/data roots and a
-# private HOME, so a developer's ~/.config/opcode, ~/.local/state or a stray
+# private HOME, so a developer's ~/.config/abird/opcode, ~/.local/state or a stray
 # XDG_* setting can never change an outcome.  The dirs are removed on exit.
 HERMETIC=$(mktemp -d "${TMPDIR:-/tmp}/opcode-hermetic.XXXXXX")
 XDG_CONFIG_HOME="$HERMETIC/config"

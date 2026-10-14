@@ -316,8 +316,8 @@ The output always ends with `\n`.
 ### 7.1 Configuration
 
 JSONC files: `<config dir>/config.jsonc` (user) and `<cwd>/.opcode/config.jsonc`
-(project, trusted only). `<config dir>` is `$XDG_CONFIG_HOME/opcode`, else
-`~/.config/opcode`. Keys the implementation reads:
+(project, trusted only). `<config dir>` is `$XDG_CONFIG_HOME/abird/opcode`, else
+`~/.config/abird/opcode`. Keys the implementation reads:
 
 - `default_provider`, `default_model`
 - `session_dir`, `theme`, `default_thinking`
@@ -476,7 +476,7 @@ for <p>`.
 ### 9.1 Files
 
 `session_new()` writes `$OPCODE_SESSION_DIR`, else config `session_dir`, else
-`$XDG_DATA_HOME/opcode/sessions/--<sanitized-cwd>--/` (default
+`$XDG_DATA_HOME/abird/opcode/sessions/--<sanitized-cwd>--/` (default
 `~/.local/share/...`), file `<unix_ms>_<id8>.jsonl`. One JSON object per line:
 header `{"type":"session","schema_version":1,...}`, then `message`,
 `model_change`, `custom`, `compaction` entries. Keys are snake_case, tagged

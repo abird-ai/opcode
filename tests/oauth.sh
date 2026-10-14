@@ -66,7 +66,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-mkdir -p "$tmp/cfg/opcode"
+mkdir -p "$tmp/cfg/abird/opcode"
 export XDG_CONFIG_HOME="$tmp/cfg"
 export XDG_DATA_HOME="$tmp/data"
 export OAUTH_LOG="$tmp/requests.log"
@@ -283,7 +283,7 @@ else
     fail=1
 fi
 
-authf="$tmp/cfg/opcode/auth.jsonc"
+authf="$tmp/cfg/abird/opcode/auth.jsonc"
 # pre-seed another provider so login has to merge, not clobber
 printf '%s\n' '{"openai":{"api_key":"KEEP-ME"}}' > "$authf"
 

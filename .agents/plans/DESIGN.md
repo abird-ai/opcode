@@ -245,7 +245,7 @@ bound to both `::1` and `127.0.0.1`; tokens are stored atomically with mode
 `message`, `model_change`, `custom`, `compaction`), snake_case keys, Unix
 millisecond timestamps, an `id`/`parent_id` chain and `schema_version` in the
 header. Files live under `$OPCODE_SESSION_DIR`, else config `session_dir`, else
-`$XDG_DATA_HOME/opcode/sessions/--<sanitized-cwd>--/`. `--continue`/`--resume`
+`$XDG_DATA_HOME/abird/opcode/sessions/--<sanitized-cwd>--/`. `--continue`/`--resume`
 open the newest session for the cwd, `--session` names one, and `--no-session`
 disables persistence. The full schema is in `src/core/API.md`.
 

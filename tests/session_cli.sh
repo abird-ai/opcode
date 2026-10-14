@@ -27,7 +27,7 @@ run() { timeout 30 ./build/opcode "$@"; }
 
 # 1. first run creates a session
 run -p "first" --provider anthropic --api-key test --replay tests/data/agent_replay.wire > /dev/null
-f=$(find "$XDG_DATA_HOME/opcode/sessions" -name '*.jsonl' 2>/dev/null | head -1)
+f=$(find "$XDG_DATA_HOME/abird/opcode/sessions" -name '*.jsonl' 2>/dev/null | head -1)
 if [ -n "$f" ]; then echo "ok   session-created"; else echo "FAIL session-created"; fail=1; fi
 
 # header + model_change + user + assistant(tool_use) + tool_result + assistant = 6 lines
@@ -74,10 +74,10 @@ else
 fi
 
 # 3. --no-session leaves the store unchanged
-before=$(find "$XDG_DATA_HOME/opcode/sessions" -name '*.jsonl' | wc -l)
+before=$(find "$XDG_DATA_HOME/abird/opcode/sessions" -name '*.jsonl' | wc -l)
 run -p "third" --no-session --provider anthropic --api-key test \
     --replay tests/data/agent_replay_simple.wire > /dev/null
-after=$(find "$XDG_DATA_HOME/opcode/sessions" -name '*.jsonl' | wc -l)
+after=$(find "$XDG_DATA_HOME/abird/opcode/sessions" -name '*.jsonl' | wc -l)
 check session-nosession "$before" "$after"
 
 # 4. schema_version policy: a newer session refuses with a clear message and a

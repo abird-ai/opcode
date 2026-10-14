@@ -10,7 +10,7 @@
 #
 # <config dir> is g_config_home when the app set it before calling config_load
 # (debug/test override; the same global is read by prompt.s), else
-# $XDG_CONFIG_HOME/opcode, else $HOME/.config/opcode.
+# $XDG_CONFIG_HOME/abird/opcode, else $HOME/.config/abird/opcode.
 #
 # The JSON parser owns a single-document arena, so config_load keeps the raw
 # bytes of each accepted file and every lookup re-parses them on demand.
@@ -38,8 +38,8 @@ cfg_trust_asked: .quad 0        # process-lifetime: the trust prompt runs at mos
 .section .rodata
 .Lenv_xdg:       .asciz "XDG_CONFIG_HOME"
 .Lenv_home:      .asciz "HOME"
-.Lsub_opcode:    .asciz "/opcode"
-.Lsub_dotconfig: .asciz "/.config/opcode"
+.Lsub_opcode:    .asciz "/abird/opcode"
+.Lsub_dotconfig: .asciz "/.config/abird/opcode"
 .Lconfig_name:   .asciz "/config.jsonc"
 .Ltrust_name:    .asciz "/trust.jsonc"
 .Ltmp_suffix:    .asciz ".tmp"
