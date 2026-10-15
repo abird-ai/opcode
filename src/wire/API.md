@@ -6,7 +6,7 @@ The `Url` layout below is single-sourced in `src/wire/url.inc` (included after
 `opcode.inc`); `url.s`, `http_client.s`, `app/fetch.s`, `app/update.s` and the
 core URL consumers all include it, so there is one `U_*` layout in the tree.
 
-```
+```text
 STRUCT
 F U_scheme, 8      # ptr into the url string
 F U_host, 8
@@ -35,25 +35,26 @@ url_authority(url, buf, cap) -> len | -ERANGE    ("host[:port]"; Host header)
 
 All builders append to an SB (first arg). They never reset the SB.
 
-```
+```text
 http_req_begin(sb, method cstr, host ptr, host_len, path ptr, path_len) -> 0
 http_req_header(sb, name cstr, value ptr, value_len) -> 0
 http_req_header_cstr(sb, name cstr, value cstr) -> 0
 http_req_body(sb, ptr, len) -> 0     # emits "Content-Length: n\r\n\r\n" then the body
 ```
+
 `http_req_begin` emits `METHOD path HTTP/1.1\r\nHost: host\r\n`. The caller adds
 headers and either ends with `http_req_end(sb)` (no body) or calls `http_req_body`.
 `http_req_header` rejects a value containing CR or LF (`-EINVAL`, nothing
 appended), because either would terminate the line and reparse the remainder as
 a new header.
 
-```
+```text
 http_req_end(sb) -> 0                # emits the blank line, no body
 ```
 
 ## src/wire/http.s — response parser
 
-```
+```text
 STRUCT (fields are implementation-private; do not index from outside)
 http_resp_init(r, on_body, ctx)      # on_body(ctx, ptr, len) called for each body chunk
 http_resp_feed(r, ptr, len) -> consumed bytes   # 0 when more input is needed
@@ -96,7 +97,7 @@ parsed Url, the host/authority copies, the socket/TLS handles and the receive
 buffer. Errors are negative errno; `hc_connect` never closes on failure and
 leaves `HC_stage` at the furthest step so the caller can classify the error.
 
-```
+```text
 hc_init(hc)
 hc_setup(hc, url cstr, flags) -> 0 | -EINVAL     # HC_F_INSECURE = 1
 hc_set_recbuf(hc, ptr, cap)
@@ -123,7 +124,7 @@ out_ip4, dns_ms)`, `hc_resolve(hc, dns_ms)`, `hc_socket_start(hc, connect_ms)`,
 
 ## src/wire/sse.s
 
-```
+```text
 sse_init(s, on_event, ctx)     # on_event(ctx, event ptr,len, data ptr,len)
 sse_feed(s, ptr, len)
 sse_reset(s)
@@ -141,7 +142,7 @@ sse_error(s) -> 0 | cstr              # e.g. "event too large"
 Writes into an SB (first arg everywhere). Escapes strings per RFC 8259
 (control chars, `"`, `\`; no HTML escaping). Never emits whitespace.
 
-```
+```text
 jsonw_obj(sb) jsonw_obj_end(sb) jsonw_arr(sb) jsonw_arr_end(sb)
 jsonw_key(sb, cstr) jsonw_key_n(sb, ptr, len)
 jsonw_str(sb, ptr, len) jsonw_str_cstr(sb, cstr)
@@ -152,13 +153,14 @@ jsonw_raw(sb, ptr, len)        # pre-encoded value (number/literal)
 
 ## Replay file format (mock backend, `src/net/mock.s`)
 
-```
+```text
 magic:  "FWIR1\n" (6 bytes)
 records, repeated until EOF:
     u8  dir          0 = client -> server (captured), 1 = server -> client (replayed)
     u32 len          little-endian
     bytes payload
 ```
+
 `net_recv` returns dir=1 payloads in order, then EOF (0). `net_send` appends to
 a capture buffer; `mock_sent() -> ptr, len` exposes it. DNS returns 127.0.0.1 for
 any name unless the file contains an `ip` record (reserved for later). TLS is a

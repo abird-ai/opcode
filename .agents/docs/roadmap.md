@@ -9,7 +9,7 @@ the other targets reuse the same portable layers through a platform layer
 selected at link time.
 
 | Component | State |
-|---|---|
+| --- | --- |
 | `base/` | implemented — allocator, `SB`/`VEC`, strings, JSONC, log, poll/watch loop |
 | `plat/` Linux x86-64 | reference; the full suite runs in `make check` |
 | `plat/` Linux aarch64 | implemented; executed under `qemu-aarch64` (in the flake check) |
@@ -90,7 +90,7 @@ Published measurements per release (reference build: stripped release binary
 on Linux x86-64):
 
 | Benchmark | Tool |
-|---|---|
+| --- | --- |
 | startup | `hyperfine 'opcode --version'` |
 | RSS idle / after many turns | `/proc/self/status`, `time -v` |
 | binary size | `ls -l`, `size -A` |

@@ -7,7 +7,7 @@ linked in is vendored freestanding mbedTLS and freestanding plugin code.
 ## Build and test
 
 | Command | Result |
-|---|---|
+| --- | --- |
 | `make` | build debug `build/opcode` |
 | `make release` | relink `build/opcode` stripped |
 | `make test` | build the unit-test binaries |

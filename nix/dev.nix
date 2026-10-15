@@ -26,6 +26,13 @@
           curl
           llvmPackages.clang
           python3
+          # linting: clang-format/clang-tidy for C23, cppcheck, asmfmt for the
+          # hand-written assembly, markdownlint and alejandra for the docs/flake
+          clang-tools
+          cppcheck
+          asmfmt
+          markdownlint-cli2
+          alejandra
         ])
         ++ lib.optionals (pkgs ? gdb) [pkgs.gdb]
         ++ lib.optionals (pkgs ? hyperfine) [pkgs.hyperfine]

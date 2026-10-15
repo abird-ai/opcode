@@ -21,6 +21,7 @@ Implemented — **stdio transport only**:
   An untrusted project `mcp.jsonc` is skipped silently, so opening an
   untrusted clone cannot spawn its `command` at startup. Both files share the
   format:
+
   ```jsonc
   {
     "servers": {
@@ -32,6 +33,7 @@ Implemented — **stdio transport only**:
     }
   }
   ```
+
   `env` values are copied verbatim; `{"url": ...}` entries (HTTP transport) are
   ignored.
 - Each server is spawned with `os_spawn`; the JSON-RPC 2.0 handshake
@@ -59,7 +61,7 @@ exposes **tools only**; prompts and resources are not read.
 JSONL on stdin/stdout with Opcode's own documented command set. Each line is one
 JSON object with a `"type"` field:
 
-```
+```text
 → {"type":"prompt","text":"explain this repo"}
 → {"type":"abort"}
 → {"type":"quit"}

@@ -15,7 +15,7 @@ yet. The goal remains that when a port lands, nothing portable has to change.
 Everything outside `src/plat/` and `src/net/` is portable. A port adds one
 directory per layer and selects it in the build:
 
-```
+```text
 src/plat/mac/{mac.inc,rt.s,sys.s}   Layer 0 over libSystem  (entry: _main in rt.s)
 src/net/mac/net.s                  Layer 1 socket stubs over libSystem
 src/plat/win/{win.inc,rt.s,fd.s,sys.s,sock.s,proc.s,tty.s,dir.s,abi.s}
@@ -124,7 +124,7 @@ in `src/net/mac/net.s`; the table references their globals.
 ### 2.4 File map
 
 | file | lines | role |
-|---|---:|---|
+| --- | ---: | --- |
 | `src/plat/mac/mac.inc` | 110 | macros (`FN`, `ENTER`, `LEAVE`, `XCALL`, `XCALLR`, `XRET`, `ADR`, `GOT`) and Linux errno constants; the native↔translated register/stack contract |
 | `src/plat/mac/rt.s` | 204 | `_main` entry (builds a Linux-shaped initial stack and jumps to the translated `_start`), plus the translator runtime helpers (`x_rep_movsb`, `x_rep_movsb_back`, `x_rep_stosb/stosd/stosq`, `x_repe_cmpsb`, `x_repne_scasb`, `x_udiv128`) |
 | `src/plat/mac/sys.s` | 822 | `x_syscall`, the 320-entry `sys_table`, `errno_map`, `cc_map`, signal trampoline, struct conversions |
@@ -151,7 +151,7 @@ and the verification policy are unchanged from `platform.md` §3.
 ### 2.6 What is verified where
 
 | level | command | status |
-|---|---|---|
+| --- | --- | --- |
 | translates | `python3 tools/arm64.py -I src -I build <in.s> <out.s>`; `make arm64-translate` | **yes** — every portable/generated/test source in the gate |
 | assembles | `make arm64-translate` (translated + native), `clang -target arm64-apple-macos11 -c …` | **yes** — all translated sources + 3 native AArch64 objects + the arm64 C objects; Mach-O arm64 |
 | links (Linux cross, zig) | `make darwin-arm64-cross darwin-arm64-test ARM64_CC=clang ARM64_LD="<zig>/bin/zig cc" ARM64_LDFLAGS="-target aarch64-macos.11.0 -mmacosx-version-min=11.0"`; `nix build path:$PWD#darwin-arm64-cross` | **yes** — the app, the Layer-0 smoke binary and the unit-test binaries link as Mach-O arm64, import only `/usr/lib/libSystem.B.dylib`, and pass `tools/check-macho.sh` (app, smoke, and the `str_test` unit binary). A **smoke check**, not the release artifact |
@@ -327,7 +327,7 @@ Three Linux files are *not* thin syscall wrappers and get native Windows
 replacements instead of being reused:
 
 | Linux file | Windows source | why |
-|---|---|---|
+| --- | --- | --- |
 | `src/plat/linux/proc.s` | `src/plat/win/proc.s` | Win32 has no fork/execve; `CreateProcessW` builds the child directly |
 | `src/plat/linux/tty.s` | `src/plat/win/tty.s` | console modes, not termios; SIGWINCH does not exist |
 | `src/plat/linux/dir.s` | `src/plat/win/dir.s` | `FindFirstFileW`/`FindNextFileW`, not `getdents64` |
@@ -337,7 +337,7 @@ Everything else is reused through the shim: files/mappings/time/entropy/poll
 stack (`src/net/linux/socket.s`, `dns.s`). File map:
 
 | file | role |
-|---|---|
+| --- | --- |
 | `src/plat/win/win.inc` | Win32 constants, the fd-table layout, errno additions |
 | `src/plat/win/fd.s` | fd table (`fd 0/1/2` = standard handles), UTF-8↔UTF-16, Win32/WSA↔errno |
 | `src/plat/win/sys.s` | `win_syscall` + all file/memory/time/poll/misc handlers |
@@ -541,7 +541,7 @@ toolchain comes from the flake devShell:
 The link line is `$(A64_LD) $(A64_LDFLAGS) -o build/opcode-linux-aarch64 $(A64_OBJS)`
 with `A64_LDFLAGS` =
 
-```
+```text
 -static -nostdlib --no-dynamic-linker -z noexecstack -e opcode_entry
 ```
 
@@ -554,7 +554,7 @@ point.
 binary is translated x86-64:
 
 | file | role |
-|---|---|
+| --- | --- |
 | `linux.inc` | the contract header: `FN`/`ADR`/`IMM32` macros, `L_EINVAL`/`L_ENOSYS`, and the register/stack/flag/return convention |
 | `entry.s` | `opcode_entry` (section 4.3) |
 | `rt.s` | the translator runtime helpers (`x_rep_movsb(_back)`, `x_rep_stosb/d/q`, `x_repe_cmpsb`, `x_repne_scasb`, `x_udiv128`) |
@@ -574,7 +574,7 @@ sources issue: 34 pure remaps and 9 slow paths. The slow paths
 reshape arguments:
 
 | x86-64 | aarch64 | transformation |
-|---|---|---|
+| --- | --- | --- |
 | `poll(7)` | `ppoll(73)` | ms `int` → `timespec` on the shim's scratch area; bit 31 → infinite; sigmask NULL, sigsetsize 8 |
 | `rename(82)` | `renameat(38)` | `renameat(AT_FDCWD, old, AT_FDCWD, new)` |
 | `dup2(33)` | `dup3(24)` | `dup3(old, new, 0)` |
@@ -596,7 +596,7 @@ and `st_size` (`grep.s:650`), are covered along with the whole struct.
 x86-64 but not all:
 
 | constant | x86-64 | asm-generic (aarch64) | shim action |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | `O_DIRECT` | `0x4000` | `0x10000` | translate |
 | `O_DIRECTORY` | `0x10000` | `0x4000` | translate |
 | `O_NOFOLLOW` | `0x20000` | `0x8000` | translate |
@@ -683,7 +683,7 @@ everything else. No stub returns 0 without doing the work.
 ### 4.6 The emulation matrix
 
 | level | how | status |
-|---|---|---|
+| --- | --- | --- |
 | translates | `tools/arm64.py --os linux` | **yes** — every portable source plus the `src/plat/linux` + `src/net/linux` wrappers |
 | assembles | `make TARGET=linux-aarch64` | **yes** — `aarch64-unknown-linux-gnu-as` over the translated set and the native shim; `aarch64-unknown-linux-gnu-gcc` for the C objects |
 | links | the `A64_LD` line in section 4.1 | **yes** — static aarch64 ELF, no dynamic linker, zero undefined symbols |
@@ -746,7 +746,7 @@ nix build path:$PWD#checks.x86_64-linux.linux-aarch64-qemu
 
 Run `make check` for the current native suite count. The linux-aarch64 lane is:
 
-```
+```text
 $ nix develop --command sh -c 'OPCODE_TARGET=linux-aarch64 EMULATOR=qemu-aarch64 make -j8 test-qemu'
 …
 TESTS <n> passed, 0 failed
@@ -770,7 +770,7 @@ translator target for riscv64 and no platform layer.
 `tools/targets.sh` prints the table (its output today, `nix run .#targets` runs
 the same script); the same table lives in `lib.opcodeTargets` in `nix/cross.nix`:
 
-```
+```text
 TARGET             GATE                                                                                                                    ENABLED  ARTIFACT
 linux-x86_64       native                                                                                                                  yes      opcode-linux-x86_64
 linux-aarch64      tools/arm64.py + src/plat/linux/aarch64 + QEMU CI (cross-build + full suite; Darwin arm64 unverified on its own runner) yes      opcode-linux-aarch64
