@@ -67,7 +67,7 @@ wire parsing and config/session work, and the parser arena is reset per document
 `AS_SEND`, `AS_RECV`, `AS_TOOLS`, `AS_TURN`, `AS_DONE`, `AS_ERROR`. Entry
 points:
 
-```
+```text
 agent_init()                    # MDF model resolution, session load, plugins, MCP
 agent_run(prompt) -> exit code  # print-mode driver: init + submit + step until done
 agent_submit(prompt) -> 0|1      # start a turn (0 = accepted, 1 = busy)
@@ -115,7 +115,7 @@ Behavior:
 Internal consumers (TUI, JSON/RPC front ends) receive typed events through the
 sink in `core/core.inc`:
 
-```
+```text
 SE_TEXT        a=ptr b=len        SE_TEXT_END
 SE_THINK       a=ptr b=len        SE_THINK_END
 SE_TOOL_START  a=id  b=name       SE_TOOL_DELTA a=ptr b=len     SE_TOOL_END
@@ -242,7 +242,7 @@ schema accepts any object (its `exec` reports).
 ### 5.2 Built-in tools
 
 | Tool | Behavior |
-|---|---|
+| --- | --- |
 | `read` | numbered lines, `offset`/`limit`; head truncation at 2000 lines / 50 KB with a continuation hint; first 8 KB NUL sniff rejects binaries |
 | `bash` | `sh -lc <command>`, stdout+stderr captured on a non-blocking pipe; default timeout 120 s, cap 1800 s; exit code appended; `[timed out]` marker |
 | `edit` | `{path, edits:[{oldText,newText}]}`; matches located in the original text, each unique and non-overlapping, applied right-to-left; BOM/CRLF preserved; atomic temp + rename (shared `tool_write_atomic`); returns a unified diff (capped) |
@@ -288,7 +288,7 @@ provider, and only JSON placement and a few provider-scoped parameters differ
 (§7.2, ADR-7). The blocks, in the order they are emitted:
 
 | # | Block | Purpose | Where (`src/core/prompt.s`) |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | 1 | preamble | identity and operating behaviour | `<config>/SYSTEM.md`, else the built-in text (`:97-99`, `:1929-1942`) |
 | 2 | `# Tools` | one line per active tool, `name: description` | the active `TL_desc` set, or a plugin `TL_snippet` (`:1944-1999`) |
 | 3 | `# Rules` | tool and conduct guidelines plus plugin `TL_guidelines` bullets | the `.LS_rules` literal (`:104-108`, `:2000-2027`) |
@@ -334,7 +334,7 @@ is placed and in the provider-scoped parameters below (ADR-7). The prompt text
 is byte-identical for every provider.
 
 | `api` | Where the prompt lands | Tool definition shape | Provider-only extras |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | `anthropic-messages` | top-level `system` array `[{"type":"text","text":…}]` (`src/prov/anthropic.s:588-616`) | `{name, description, input_schema}` (`anthropic.s:669-712`) | optional `thinking` object (`anthropic.s:568-580`); the OAuth `anthropic-beta` header (§8) |
 | `openai-chat` | `messages[0]` as `{"role":"system","content":…}` (`src/prov/openai.s:684-702`) | `{type:"function", function:{name, description, parameters}}` (`openai.s:794-848`) | `stream_options:{include_usage:true}` (`openai.s:757-767`) |
 | `openai-responses` | top-level `instructions`, a **string**; no `role:"system"` item in `input` (`src/prov/openai_responses.s:671-684`) | `{type:"function", name, description, parameters, strict:false}` (`openai_responses.s:776-841`) | `tool_choice:"auto"` + `parallel_tool_calls:true`, but **only when the request has tools** (`:763-769`, `:844-857`), plus `store:false` (`:743-749`) and `max_output_tokens` (`:751-760`) |
@@ -510,7 +510,7 @@ custom entry is recorded. Both constants are compile-time defaults
 ## 10. Modes, commands and flags
 
 | Mode | Behavior |
-|---|---|
+| --- | --- |
 | TUI (default) | inline scrollback shell (`--tui-mode inline`) or fullscreen (`--tui-mode fullscreen`); `/quit`, `/new` |
 | `-p` / `--print` | run one prompt, stream assistant text to stdout, exit 0/1 |
 | `--mode json` | JSONL of the agent events on stdout |

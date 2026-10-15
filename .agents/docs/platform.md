@@ -214,7 +214,7 @@ Linux cross-link are described in `.agents/docs/ports.md` §2.6.
 Tests link this backend instead of `src/net/linux/`. Replay files start with
 `"FWIR1\n"` followed by records:
 
-```
+```text
 u8  dir       0 = client -> server (captured), 1 = server -> client (replayed)
 u32 len       little-endian
 bytes payload

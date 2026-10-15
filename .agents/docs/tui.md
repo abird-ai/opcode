@@ -164,7 +164,7 @@ A streaming block model (`markdown.inc` holds the layouts and style tags).
 `MD_QUOTE`/`MD_RULE` blocks and re-parses only the trailing incomplete block,
 so completed blocks keep their wrapped rows; `md_set_width` re-renders all of
 them once (resize/theme). A blank line ends a paragraph, `#`..`######` starts a
-heading, `- `/`* `/`+ ` a bullet, `> ` a quote, a line of >=3 `-`/`*`/`_` a rule,
+heading, `-`/`*`/`+` a bullet, `>` a quote, a line of >=3 `-`/`*`/`_` a rule,
 and a ```` ``` ````/`~~~` fence buffers verbatim until a closing fence of the
 same char. Paragraphs join source lines with a space and wrap word-granularly
 (longer words split per codepoint); bullets emit `"- "` in the accent style and

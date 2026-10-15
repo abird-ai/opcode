@@ -23,7 +23,7 @@ Goal in one sentence:
 ## 1. Requirements
 
 | # | Requirement | How the design satisfies it |
-|---|---|---|
+| --- | --- | --- |
 | R1 | Core in assembly directly | x86-64 GNU `as`, Intel syntax, custom ABI (`FN`/`PROLOGUE`/`EPILOGUE`); no code generation for the core |
 | R2 | No stdlibs | `-static -nostdlib --no-dynamic-linker`; own allocator, strings, JSON, HTTP, TLS; no libc |
 | R3 | Low-level platform libraries | Raw kernel syscalls for files, processes, terminal/TTY, sockets and DNS; vendored freestanding mbedTLS for TLS |
@@ -48,7 +48,7 @@ Goal in one sentence:
 
 ## 3. Architecture
 
-```
+```text
 app/     modes: tui · print · json · rpc  ·  subcommands (login, logout, models, fetch, update) · flags · onboarding
 ext/     MCP stdio client · static plugins (C ABI) host
 tui/     terminal · cell-grid renderer · view buffer · editor/composer · input parser · markdown · tool cards · menu · status footer · themes
@@ -380,7 +380,7 @@ is `fetch`-only — the agent front ends take `--replay FILE` only.
 ## 6. Performance budget
 
 | Metric | Target |
-|---|---|
+| --- | --- |
 | time to first frame (`--version`) | < 3 ms |
 | RSS idle (TUI, 20k-token session) | < 12 MB |
 | binary size (stripped, static) | ~640 KB (vendored mbedTLS + CA bundle included) |
@@ -399,7 +399,7 @@ and the arm64 cross-assembler/compiler) and `python3` (generated assets,
 catalog and plugin tables).
 
 | Command | Result |
-|---|---|
+| --- | --- |
 | `make` | build the debug binary `build/opcode` |
 | `make release` | relink `build/opcode` stripped |
 | `make test` | build the unit-test binaries |
@@ -492,7 +492,7 @@ MIT-licensed model metadata published by pi.
 
 ## 11. Repository layout
 
-```
+```text
 .agents/AGENTS.md              coding-agent guide (build, ABI, tests)
 .agents/plans/DESIGN.md        this document
 .agents/docs/                  design-decisions, platform, core-agent, extensibility, tui, ports

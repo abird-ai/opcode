@@ -26,7 +26,7 @@ method for both. `opcode` and `agentc` are the two implementations of the same
 design; the external agents are `agentc`'s published figures, shown for scale.
 
 | agent | language | on-disk (stripped) | cold start | idle TUI RSS |
-|---|---|---:|---:|---:|
+| --- | --- | ---: | ---: | ---: |
 | **opcode** | hand-written x86-64 assembly | **706 KiB** | **~0.2 ms** | **~0.5 MB** |
 | agentc | freestanding C23 | 925 KiB | ~0.2 ms | ~0.6 MB |
 | codex 0.161.0 | native (Rust) | 279 MiB | ~9 ms | ~25 MB |
@@ -64,7 +64,7 @@ the current count).
 Cross targets (the toolchain must be on `PATH` or reachable through `nix develop`):
 
 | Command | Result |
-|---|---|
+| --- | --- |
 | `make TARGET=linux-aarch64` | cross-build the static, no-libc AArch64 ELF `build/opcode-linux-aarch64` |
 | `make test-qemu` | build the AArch64 unit binaries and run the full suite against the ELF under `qemu-aarch64` (0 skipped) |
 | `make arm64-translate` | translate + assemble every source for `arm64-apple-macos11` (the syntax gate; also compiles the arm64 C) |
@@ -88,7 +88,7 @@ marked prerelease.
 ## Platforms
 
 | target | builds | CI | driven by hand |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | Linux x86-64 | yes (reference) | native `make check` | yes |
 | Linux aarch64 | yes (cross) | golden suite under `qemu-aarch64` | no (qemu only) |
 | macOS arm64 | yes (translated Mach-O) | `macos-14`: build + smoke gate; full suite informational (port not hardware-verified) | no |
@@ -256,7 +256,7 @@ All files are JSONC (comments and trailing commas; unknown keys are ignored):
 ## Architecture
 
 | Layer | Contents |
-|---|---|
+| --- | --- |
 | `base/` | allocator, SB/VEC, strings, JSONC parser, log, poll/watch event loop |
 | `plat/` | Layer 0 kernel surface: files, processes, PTY/TTY, time, poll, RNG (`plat.inc`) |
 | `net/` | Layer 1 networking: sockets, DNS, TLS vtable (`net.inc`) |
@@ -292,7 +292,7 @@ deterministic replay); every layer returns negative Linux `errno` values in
 ## Further documentation
 
 | Document | Contents |
-|---|---|
+| --- | --- |
 | [`.agents/plans/DESIGN.md`](.agents/plans/DESIGN.md) | goals, requirements, architecture, decisions |
 | [`.agents/docs/design-decisions.md`](.agents/docs/design-decisions.md) | the decisions the implementation follows, with code references |
 | [`.agents/docs/platform.md`](.agents/docs/platform.md) | Layer 0/1 contracts, ports, DNS, the vendored TLS decision |

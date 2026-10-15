@@ -3,7 +3,7 @@
 Opcode is MIT licensed (see `LICENSE`). It includes or adapts the following
 third-party components.
 
-## mbedTLS 3.6.2 — https://github.com/Mbed-TLS/mbedtls
+## mbedTLS 3.6.2 — <https://github.com/Mbed-TLS/mbedtls>
 
 Copyright (c) The Mbed TLS Contributors.
 Licensed under the Apache License, Version 2.0 (or GPL-2.0-or-later).
@@ -15,7 +15,7 @@ from source as the Linux TLS backend (`third_party/mbedtls_glue.c`,
 no runtime dependency and no `dlopen`. Opcode's own configuration and glue files
 are original work under this repository's MIT license.
 
-## Mozilla CA bundle — https://curl.se/ca/cacert.pem
+## Mozilla CA bundle — <https://curl.se/ca/cacert.pem>
 
 `third_party/cacert.pem` is the Mozilla CA certificate bundle from
 <https://curl.se/ca/cacert.pem>, distributed under the Mozilla Public License,
@@ -23,7 +23,7 @@ v. 2.0 (MPL-2.0): <https://mozilla.org/MPL/2.0/>. It is embedded byte-for-byte
 into the Opcode binary by `tools/gen-assets.sh` and parsed at run time by the
 vendored mbedTLS X.509 code.
 
-## rhun — https://github.com/vshvedov/rhun
+## rhun — <https://github.com/vshvedov/rhun>
 
 Copyright (c) 2026 Vlad Shvedov, MIT License.
 
@@ -34,7 +34,7 @@ JSON arena and parser structure, and the negative-errno syscall convention
 follow that project. These files keep a minimal "adapted from rhun (MIT)"
 header.
 
-## rhun arm64 translator — https://github.com/vshvedov/rhun
+## rhun arm64 translator — <https://github.com/vshvedov/rhun>
 
 Copyright (c) 2026 Vlad Shvedov, MIT License.
 
@@ -50,14 +50,14 @@ alignment padding; `.align`/`.balign` through one layout/emit helper;
 `.rept`/`.endr` expanded at parse time; `leave` lowered to `mov rsp, rbp` +
 `pop rbp`.
 
-## rhun macOS/aarch64 platform layer — https://github.com/vshvedov/rhun
+## rhun macOS/aarch64 platform layer — <https://github.com/vshvedov/rhun>
 
 Copyright (c) 2026 Vlad Shvedov, MIT License.
 
 The native AArch64 Darwin layer is adapted from rhun's macOS port:
 
 | Opcode file | rhun source |
-|---|---|
+| --- | --- |
 | `src/plat/mac/mac.inc` | `src/mac/mac.inc` (macros and the native↔translated register/stack contract) |
 | `src/plat/mac/rt.s` | `src/mac/rt.s` (entry and translator runtime helpers) |
 | `src/plat/mac/sys.s` | `src/mac/linux.s` (`x_syscall`, the Linux-syscall-number table over libSystem, struct/flag/errno/termios conversions) |
@@ -82,7 +82,7 @@ These files are compiled into the macOS binary, which is built natively by the
 `macos-14` CI job (defined, not yet run on Apple hardware; see
 `.agents/docs/ports.md` §2).
 
-## pi — https://github.com/earendil-works/pi
+## pi — <https://github.com/earendil-works/pi>
 
 MIT License.
 

@@ -6,7 +6,7 @@ knowledge in the Layer-0 shim, exactly like the syscall story in
 `.agents/docs/ports.md` §3:
 
 | contract | implementation |
-|---|---|
+| --- | --- |
 | `net_init`, `net_socket`, `net_connect`, `net_connect_result`, `net_send`, `net_recv`, `net_close`, `net_shutdown`, `net_is_ip4` | `src/net/linux/socket.s`, assembled unchanged with `--defsym WINDOWS=1`; its `SYS` calls reach `win_syscall` and are handled by `src/plat/win/sock.s` (ws2_32: `WSAStartup`, `socket`, `ioctlsocket(FIONBIO)`, `connect`, `WSAPoll`, `send`, `recv`, `shutdown`, `setsockopt`, `getsockopt`, `closesocket`) |
 | `net_dns` | `src/net/linux/dns.s` unchanged.  It reads `/etc/hosts` (Wine resolves the host file; real Windows falls through to the public resolvers) and `/etc/resolv.conf`, then sends hand-built UDP A queries through the same WinSock syscalls |
 | `tls_*` | the vendored freestanding mbedTLS 3.6.2 (Apache-2.0) shared with Linux; `src/net/win/tls_shim.c` includes the OS-agnostic `src/net/linux/tls_shim.c` and is compiled by the mingw cross compiler with the internal SysV-shaped C ABI (`OPCODE_SYSV`) |

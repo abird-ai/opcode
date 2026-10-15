@@ -4,7 +4,7 @@ All files include `opcode.inc` (and `core/core.inc` when needed). ABI as usual.
 
 ## Layer 0 additions
 
-```
+```text
 # src/plat/linux/tty.s
 os_tty_raw(saved /* 64+ bytes */) -> 0|-errno   # tcgetattr save + raw mode
 os_tty_restore(saved)             -> 0|-errno
@@ -26,7 +26,7 @@ Attrs: `A_BOLD 1, A_UNDERLINE 2, A_DIM 4, A_REVERSE 8, A_ITALIC 16`.  `comb`
 holds one combining mark attached to the base glyph (0 = none).  `cp` sentinel
 `CELL_CONT 0xFFFFFFFF` marks the second column of a width-2 glyph.
 
-```
+```text
 grid_init(g, w, h) -> 0|-errno
 grid_free(g)
 grid_resize(g, w, h) -> 0|-errno
@@ -39,6 +39,7 @@ render_flush(g, fd) -> 0|-errno      # ANSI diff vs the previous frame, one writ
 render_dump(g, sb) -> 0              # plain text for headless tests (trim right, lines joined)
 grid_invalidate(g)                  # zero `prev` so the next flush repaints every row
 ```
+
 `g` is caller-allocated; its size is exported as the data symbol `grid_size: .quad` in render.s
 (reset the struct with that many zero bytes before `grid_init`).
 
@@ -69,7 +70,7 @@ there is exactly one implementation of each.
 
 ## src/tui/term.s
 
-```
+```text
 term_init() -> 0|-errno        # skip entirely when g_tui_headless != 0 (exported u64 global)
 term_restore()                 # idempotent; write(2)/ioctl(2) only, signal-safe
 term_size() -> rax=cols, rdx=rows
@@ -135,7 +136,7 @@ The grid stores a resolved `0xAARRGGBB` per cell; every draw site resolves its
 slot through the active theme each frame. `TH_NO_BG` is the pseudo-slot for
 the terminal background, represented by the colour `0` and emitted as SGR 49.
 
-```
+```text
 theme_init(t, dark)                       # built-in palette, detected mode
 theme_apply_named(t, name) -> 1|0         # system/dark/light/named; re-reads files
 theme_set_project_root(cwd, trusted)      # trust verdict comes from the app
@@ -162,7 +163,7 @@ greyscale-ramp special case, else 16 ANSI with muted pinned to index 8).
 
 ## src/tui/input.s
 
-```
+```text
 # InputEvent (32 bytes): { u32 key; u32 cp; u32 mods; u32 pad;
 #                         u64 paste; u64 paste_len; }
 #   mods: bit0 alt, bit1 shift, bit2 ctrl
@@ -175,6 +176,7 @@ input_idle(in, now_ms)         # arm/fire the 50 ms lone-ESC / partial-CSI timeo
 input_in_size: .quad           # exported buffer size for the caller's zeroed struct
 input_ev_size: .quad           # sizeof(InputEvent) = 32
 ```
+
 Special keys (>= 0x110000): `K_UP 0x110001, K_DOWN, K_LEFT, K_RIGHT, K_HOME, K_END,
 K_PGUP, K_PGDN, K_DEL, K_INSERT 0x11000a, K_F1 0x11000b, K_F2, K_F3, K_F4,
 K_BACKSPACE 0x7f, K_ENTER 0x0a, K_TAB 0x09, K_ESC 0x1b`, `K_PASTE 0x110010`.
@@ -208,7 +210,7 @@ history entries (oldest first), a VEC of collapsed paste bodies, the retained
 prompt, cursor/anchor, `hist_pos`, goal column, width, flags, paste counter and
 scroll.
 
-```
+```text
 editor_init(e)  editor_free(e)
 editor_set(e, ptr, len)          # replace text, expanding tabs to 4-col stops; cursor at end
 editor_text(e) -> rax ptr, rdx len
@@ -252,7 +254,7 @@ The slash-command menu is module-local state (`menu_size` is the caller's zeroed
 buffer size). It opens while the composer text begins with `/` and has no
 space/tab/newline and the filter is <= 63 bytes; the filter is case-sensitive.
 
-```
+```text
 menu_init()                              # zero state + menu_sources_refresh()
 menu_sources_refresh()                   # capture built-ins, prompts, skills, ext cmds
 menu_update(ptr, len)                    # recompute open/filter/entries
@@ -294,7 +296,7 @@ resolve to theme slots (`STYLE_ACCENT/WARN/ERROR/OK` -> `TH_ACCENT`/`TH_WARN`/
 `TH_ERR`/`TH_OK`, plain -> `TH_MUTED`) on the `TH_BG` footer band; the legacy
 `ST_*` RGB constants are unused.
 
-```
+```text
 status_register(rdi=provider, rsi=ud)     # idempotent; NULL ignored; 16 slots
 status_remove(rdi=provider, rsi=ud)
 status_reset()
@@ -326,7 +328,7 @@ The streaming markdown block model. `markdown.inc` holds the struct layouts
 (`Markdown` = text SB + `MdBlock` VEC + width), the block kinds, the style tags
 and the per-row `MD_*`/`MDF_*`/`MDC_*` constants.
 
-```
+```text
 md_init(m, width)                 # zero the struct; width < 1 -> 80
 md_free(m)                        # free text, blocks and rows
 md_reset(m)                       # md_free but keep the width
@@ -345,7 +347,7 @@ md_emit_ansi(m, sb, base_slot)    # SGR runs + '\n' per row (inline)
 
 Block kinds: `MD_PARA 0`, `MD_HEAD 1`, `MD_BULLET 2`, `MD_CODE 3`, `MD_QUOTE 4`,
 `MD_RULE 5`. A blank line ends a paragraph; `#`..`######` starts a heading;
-`- `/`* `/`+ ` starts a bullet; `> ` a quote; a line of >=3 `-`/`*`/`_` a rule;
+`-`/`*`/`+` starts a bullet; `>` a quote; a line of >=3 `-`/`*`/`_` a rule;
 a ```` ``` ````/`~~~` fence buffers verbatim until a closing fence of the same
 char (>=3). Paragraphs join source lines with a space and wrap word-granularly
 (words longer than the width split per codepoint; leading blanks dropped);
@@ -371,7 +373,7 @@ dim; inline code uses `TH_CODE`; fenced code uses `TH_THINKING`.
 A fixed-row styled transcript buffer. Row = 256 bytes of text + 256 bytes of style
 (one byte per cell: style ids from a small palette), fixed stride 512, max 20000 rows.
 
-```
+```text
 view_init(v, width)
 view_clear(v)
 view_resize(v, width)
@@ -390,6 +392,7 @@ view_scroll(v, delta)  view_scroll_bottom(v)  view_top(v) -> row
 view_set_vp(v, x, y, w, h)                 # viewport for draw
 view_draw(v, grid, fg, bg)                 # draw visible rows with palette styles
 ```
+
 Each committed row carries a background band (`view_set_bg` before the row is
 finished, read back with `view_row_bg`). `view_draw` fills the whole row with
 that band first and draws the text over it, so the card's SGR survives the
@@ -417,7 +420,7 @@ Tool-card state machine and renderer (`card.inc` holds the model, style ids and
 palette). A card starts on `SE_TOOL_START`, accumulates its argument preview
 from `SE_TOOL_DELTA`, and finishes on `SE_TOOL_EXEC`.
 
-```
+```text
 chat_init(chat)  chat_free(chat)  chat_clear(chat)
 chat_tool_start(chat, id cstr, name cstr, now_ms) -> card*
 chat_tool_delta(chat, ptr, len)
@@ -444,11 +447,12 @@ duration are frozen so goldens are deterministic.
 
 ## src/app/tui.s (integrator-owned)
 
-```
+```text
 g_tui_script: .quad   # --script FILE : headless script runner
 g_tui_headless: .quad # --headless WxH
 tui_run(argc, argv) -> exit code
 ```
+
 Script verbs (one per line, `#` comments): `type TEXT`, `key NAME` (up, down, enter,
 `alt-enter` (inserts a newline), esc, tab, backspace, ctrl-c, ctrl-o ...),
 `wait MS`, `prompt TEXT` (submit a
@@ -500,7 +504,7 @@ reports `theme: <name>` and invalidates the fullscreen frame.
 
 ## src/core/agent.s additions
 
-```
+```text
 agent_init() -> 0 | 1          # session load, model resolution, provider ctx, buffers;
                               # 1 after printing the reason (offline, no key/model, bad replay)
 agent_submit(prompt cstr) -> 0 accepted | 1 busy
@@ -511,6 +515,7 @@ agent_abort()
 g_agent_ui_fn: .quad          # fn(rdi=ctx, esi=SE_*, rdx=a, rcx=b); when set, print mode
 g_agent_ui_ctx: .quad         # does not write to stdout
 ```
+
 New sink event emitted to the UI hook only: `SE_TOOL_RESULT 11` (a=ptr, b=len) after each
 tool result message is appended, and `SE_TOOL_EXEC 13` (rdx = `TE*`) with the full
 tool-execution record (`id/name/args/result/result_len/error/duration_ms`); see

@@ -7,7 +7,7 @@ keep `rsp` 16-byte aligned before any `call`.
 
 ## src/base/str.s
 
-```
+```text
 memcpy(dst, src, n) -> dst
 memmove(dst, src, n) -> dst
 memset(dst, byte, n) -> dst
@@ -30,7 +30,7 @@ utf8_encode(codepoint, buf) -> rax length
 The single Unicode width table shared by the composer, transcript and grid
 (`view_wcwidth` is a tail call into it); strict UTF-8 decoding lives here too.
 
-```
+```text
 utf8_decode(ptr, len) -> rax cp, rdx bytes consumed      (strict; invalid -> U+FFFD, 1 byte)
 utf8_wcwidth(cp) -> 0 combining/zero-width/format, 2 wide/fullwidth/emoji, else 1
 utf8_is_combining(cp) -> 1 | 0                           (genuine combining mark only)
@@ -45,7 +45,7 @@ only genuine marks; callers store a control as a space and drop the rest.
 
 ## src/base/log.s
 
-```
+```text
 LOG_ERROR 0, LOG_INFO 1, LOG_DEBUG 2        # level scale
 write_all(fd, ptr, len) -> 0 | -errno   (retries EINTR/EAGAIN)
 log_write(ptr, len) -> 0 | -errno       (fd 2)
@@ -67,7 +67,7 @@ one compare; `agent_init` raises the gate to `LOG_DEBUG` when `--verbose` set
 
 ## src/base/mem.s
 
-```
+```text
 mem_alloc(size) -> ptr          zeroed; dies on OOM
 mem_alloc_try(size) -> ptr | 0
 mem_free(ptr)                   NULL-safe
@@ -99,7 +99,7 @@ Parser accepts JSONC: `//` and `/* */` comments, trailing commas in arrays and
 objects; rejects missing commas. Strings are decoded and NUL-terminated in the
 arena. Numbers keep their raw text (`JV_n` = byte length).
 
-```
+```text
 json_parse(ptr, len) -> JV* | 0     (resets the arena first)
 json_reset()                        frees all arena blocks but the newest
 json_get(obj, key cstr) -> JV* | 0
@@ -117,7 +117,7 @@ JV layout and JT_* constants: `opcode.inc`.
 
 ## src/base/start.s
 
-```
+```text
 _start:
     mov rdi, rsp
     and rsp, -16
