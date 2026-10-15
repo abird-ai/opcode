@@ -74,8 +74,8 @@ binaries and `tests/run.sh` on the ported runtime.
 - `tools/gen-assets.sh` (version + embedded CA bundle),
   `tools/gen-catalog.py` (model table) and `tools/gen-plugins.py` (static plugin
   table) run as part of the build; their outputs are deterministic.
-- `flake.nix` packages `x86_64-linux` and `aarch64-linux` and provides a dev
-  shell with the same toolchain.
+- The Nix flake (`flake.nix` + `nix/`) packages `x86_64-linux` and
+  `aarch64-linux` and provides a dev shell with the same toolchain.
 - The macOS arm64 recipe (`make darwin-arm64`, `make darwin-arm64-cross`), the
   linux-aarch64 recipe (`make linux-aarch64`, `make test-qemu`) and the Windows
   x86-64 recipe (`make windows-x86_64`, `make test-wine`) live in the same

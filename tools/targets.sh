@@ -1,6 +1,6 @@
 #!/bin/sh
 # Opcode cross-build target table. Probes the source tree for the paths each
-# target needs; the same table lives in lib.opcodeTargets in flake.nix and is
+# target needs; the same table lives in lib.opcodeTargets in nix/cross.nix and is
 # what release.yml consumes. Keep the three in sync.
 #
 # usage:
