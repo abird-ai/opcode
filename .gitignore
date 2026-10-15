@@ -7,3 +7,4 @@ result
 /result-*
 .agents/runs/
 .orchestrator/
+compile_commands.json
