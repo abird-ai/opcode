@@ -40,6 +40,94 @@
       markdownlint-cli2
       touch "$out"
     '';
+  # clang-format conformance for the C sources (the style lives in
+  # .clang-format).
+  clangFormat =
+    pkgs.runCommand "opcode-clang-format" {
+      nativeBuildInputs = [pkgs.llvmPackages.clang-tools];
+    } ''
+      cd ${lib.cleanSourceWith {
+        src = sourceRoot;
+        filter = path: type:
+          if type == "directory"
+          then !(lib.elem (baseNameOf path) [".git" "third_party" "build" "dist" "runs"])
+          else
+            lib.hasSuffix ".c" path
+            || lib.hasSuffix ".h" path
+            || baseNameOf path == ".clang-format";
+      }}
+      clang-format --style=file --dry-run --Werror $(find . -name '*.c' -o -name '*.h')
+      touch "$out"
+    '';
+
+  # clang-tidy over the owned C units. bear records the Makefile flags and
+  # clang-tidy reads .clang-tidy; the vendored mbedTLS units are dropped from
+  # the list so only owned code is linted.
+  clangTidy = pkgs.stdenv.mkDerivation {
+    pname = "opcode-clang-tidy";
+    inherit version;
+    src = sourceRoot;
+
+    nativeBuildInputs = with pkgs; [
+      bear
+      clang
+      gnumake
+      python3
+      binutils
+      llvmPackages.clang-tools
+    ];
+
+    hardeningDisable = ["fortify"];
+    dontConfigure = true;
+    buildPhase = ''
+      runHook preBuild
+      rm -rf build
+      bear -- make -j$NIX_BUILD_CORES
+      runHook postBuild
+    '';
+    doCheck = true;
+    checkPhase = ''
+      runHook preCheck
+      python3 -c "import json; [print(e['file']) for e in json.load(open('compile_commands.json')) if not e['file'].startswith('third_party/')]" > tidylist
+      echo "clang-tidy: $(wc -l < tidylist) translation units"
+      # The Makefile compiles the mbedTLS/TLS units through the nix cc-wrapper,
+      # whose implicit glibc -isystem is absent from the recorded command; add
+      # it so clang-tidy sees the same headers the build did.
+      xargs -P "$NIX_BUILD_CORES" -n1 clang-tidy -p . --quiet \
+        --extra-arg=-isystem${pkgs.glibc.dev}/include < tidylist
+      runHook postCheck
+    '';
+    installPhase = ''touch "$out"'';
+  };
+
+  # Assembly lint: there is no GNU-as linter, so assemble the whole tree with
+  # `as --fatal-warnings`. Any assembler diagnostic fails the check.
+  assembly = pkgs.stdenv.mkDerivation {
+    pname = "opcode-assembly";
+    inherit version;
+    src = sourceRoot;
+
+    nativeBuildInputs = with pkgs; [
+      clang
+      gnumake
+      python3
+      binutils
+    ];
+
+    hardeningDisable = ["fortify"];
+    dontConfigure = true;
+    buildPhase = ''
+      runHook preBuild
+      rm -rf build
+      make -j$NIX_BUILD_CORES AS="as --fatal-warnings"
+      runHook postBuild
+    '';
+    installPhase = ''
+      runHook preInstall
+      install -Dm755 build/opcode $out/bin/opcode
+      runHook postInstall
+    '';
+  };
 in
   {
     default = self.packages.${system}.default;
@@ -47,7 +135,7 @@ in
     targets = pkgs.runCommand "opcode-targets-table" {} ''
       ${self}/tools/targets.sh > $out
     '';
-    inherit alejandra markdownlint;
+    inherit alejandra markdownlint clangFormat clangTidy assembly;
   }
   // lib.optionalAttrs (system == "x86_64-linux" && targetEnabled opcodeTargets.windows-x86_64) {
     # Cross-compile the PE on Linux; the Wine execution lane lives in CI

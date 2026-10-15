@@ -12,26 +12,22 @@
 
 /* No libc: tiny local string helpers (the plugin must not allocate outside
  * the host allocator, and must not call into libc at all). */
-static unsigned long s_len(const char *s)
-{
+static unsigned long s_len(const char *s) {
     unsigned long n = 0;
     while (s[n])
         n++;
     return n;
 }
 
-static void s_copy(char *dst, const char *src)
-{
+static void s_copy(char *dst, const char *src) {
     while ((*dst++ = *src++))
         ;
 }
 
 static OPCODE_SYSV void hello_execute(const OpcodeHostV1 *host, uint64_t call,
-                          const char *tool_call_id, const char *args_json,
-                          const char *signal_token)
-{
-    static const char pre[] =
-        "{\"content\":[{\"type\":\"text\",\"text\":\"hello ";
+                                      const char *tool_call_id, const char *args_json,
+                                      const char *signal_token) {
+    static const char pre[] = "{\"content\":[{\"type\":\"text\",\"text\":\"hello ";
     static const char post[] = "\"}],\"is_error\":false}";
     const char *name = host->json_get_str(args_json, "name", "world");
     char *escaped = host->json_escape(name ? name : "world");
@@ -67,22 +63,20 @@ static const OpcodeToolV1 hello_tool = {
     0, /* prompt_snippet */
     0, /* prompt_guidelines */
     hello_execute,
-    0  /* update */
+    0 /* update */
 };
 
-static OPCODE_SYSV int example_init(const OpcodeHostV1 *host)
-{
+static OPCODE_SYSV int example_init(const OpcodeHostV1 *host) {
     host->register_tool(&hello_tool);
     return 0;
 }
 
-OPCODE_SYSV int opcode_plugin_init(const OpcodeHostV1 *host, OpcodePluginV1 *out)
-{
+OPCODE_SYSV int opcode_plugin_init(const OpcodeHostV1 *host, OpcodePluginV1 *out) {
     out->abi_version = OPCODE_ABI_VERSION;
     out->struct_size = sizeof(OpcodePluginV1);
     out->name = "example_c";
     out->version = OPCODE_EXAMPLE_VERSION;
     out->init = example_init;
     out->shutdown = 0;
-    return 0;  /* the host calls out->init(host) after the ABI check */
+    return 0; /* the host calls out->init(host) after the ABI check */
 }
