@@ -6,7 +6,8 @@
 #   make check         build + run the full suite (tests/run.sh)
 #   make darwin-arm64  build/opcode-darwin-arm64 (Mach-O arm64; see the darwin section)
 #   make linux-aarch64 build/opcode-linux-aarch64 (static ELF aarch64; see its section)
-#   make clean
+#   make clean         main build tree (build/); drops the linked-in plugins with it
+#   make purge         clean + caches and generated trees outside build/
 #
 # Everything portable is assembled from src/**; platform sources come from
 # src/plat/linux and src/net/linux; the tests link the mock net backend instead.
@@ -474,7 +475,7 @@ WIN_TEST_OBJS   := $(addprefix build/win/,$(WIN_TEST_X86SRC:.s=.o)) \
 WIN_TESTBINS    := $(addprefix build/win/tests/,$(TESTS))
 
 # ---------------------------------------------------------------- rules
-.PHONY: all release test check clean arm64-translate darwin-arm64 darwin-arm64-smoke darwin-arm64-test darwin-arm64-discover-live darwin-arm64-cross linux-aarch64 test-aarch64 linux-aarch64-discover-live test-qemu windows-x86_64 test-wine
+.PHONY: all release test check clean purge arm64-translate darwin-arm64 darwin-arm64-smoke darwin-arm64-test darwin-arm64-discover-live darwin-arm64-cross linux-aarch64 test-aarch64 linux-aarch64-discover-live test-qemu windows-x86_64 test-wine
 
 all: $(BIN)
 
@@ -800,5 +801,15 @@ test-qemu:
 		exit 1; \
 	fi
 
+# clean removes the main build tree only. The statically linked plugins are
+# compiled into build/ (build/obj/plugins, build/{mac,a64,win}/c/plugins), so
+# they go with it; their sources under plugins/ are untouched.
 clean:
 	rm -rf build
+
+# purge additionally drops caches and generated trees that live outside build/:
+# Nix GC-root symlinks, Python bytecode, and any per-plugin/extension target dirs.
+purge: clean
+	rm -rf result result-*
+	rm -rf plugins/*/target extensions/*/target
+	find . -type d -name __pycache__ -prune -exec rm -rf {} +
