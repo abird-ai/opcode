@@ -498,7 +498,7 @@ MIT-licensed model metadata published by pi.
 .agents/docs/                  design-decisions, platform, core-agent, extensibility, tui, ports
 include/opcode_plugin.h         stable C ABI (C/Rust/Zig)
 Makefile                       Linux/native build plus the cross-build recipes
-flake.nix / flake.lock         Nix packages, checks and dev shell
+flake.nix / nix/ / flake.lock   Nix packages, checks and dev shell
 runtime/catalog.json           built-in model seed
 src/opcode.inc                  macros, constants, struct offsets
 src/base/                      start, mem, str, uni, json (JSONC), log, loop

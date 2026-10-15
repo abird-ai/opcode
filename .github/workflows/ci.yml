@@ -89,7 +89,7 @@ jobs:
 
       # The flake exposes packages.aarch64-darwin.darwin-arm64: the Mach-O
       # recipe from the Makefile, packaged for a darwin host with no cross
-      # toolchain (see flake.nix).
+      # toolchain (see nix/native.nix).
       - name: Nix package (darwin-arm64)
         run: nix build .#darwin-arm64 --print-build-logs
 

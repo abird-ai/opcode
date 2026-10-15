@@ -188,7 +188,7 @@ tools/check-macho.sh --smoke build/mac/tests/str_test
 
 # the flake wraps the same thing and runs check-macho.sh as its checkPhase
 # (`path:` includes the working tree; plain .#darwin-arm64-cross is equivalent
-#  once flake.nix is committed)
+#  once the flake is committed)
 nix build path:$PWD#darwin-arm64-cross
 ```
 
@@ -768,7 +768,7 @@ translator target for riscv64 and no platform layer.
 ## 6. CI and the cross-build matrix
 
 `tools/targets.sh` prints the table (its output today, `nix run .#targets` runs
-the same script); the same table lives in `lib.opcodeTargets` in `flake.nix`:
+the same script); the same table lives in `lib.opcodeTargets` in `nix/cross.nix`:
 
 ```
 TARGET             GATE                                                                                                                    ENABLED  ARTIFACT
@@ -840,7 +840,7 @@ The gate is the port's definition of done; CI needs no other edit.
      `ci.yml` and the release verification step in `release.yml`;
   5. executed the full suite under `qemu-aarch64` from a clean tree with
      all checks passing and 0 skipped (section 4.8).
-  The gate (`tools/targets.sh` and `flake.nix`) opens only when the shim, the
+  The gate (`tools/targets.sh` and `nix/cross.nix`) opens only when the shim, the
   translator and both the CI job and the release step exist, so a port without
   verification cannot ship.
 - **linux-riscv64**: add `src/plat/riscv64/` and `src/net/riscv64/` implementing
