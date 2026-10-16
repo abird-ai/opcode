@@ -76,8 +76,30 @@ sockets/DNS/TLS, per OS), `src/wire` (HTTP/SSE/JSON writer/URL), `src/core`
 - `opcode update` checks
   `https://api.github.com/repos/abird-ai/opcode/releases/latest`.
 
+## Plan / TODO workflow
+
+Work is tracked as plain markdown checklists. There are no per-run `STATE.md`,
+`REPORT.md`, `decisions.md`, `contracts/` or evidence bundles: the git history
+is the evidence, and a user-approved snapshot commit at the tip is the accepted
+proof of record. **The rules are `.agents/plans/TODO-SPEC.md`.** In short:
+
+- `.agents/plans/TODO.md` — the plan ledger: one line per plan. A plan is
+  `done` only when its `plans/<plan>/TODO.md` has no open items.
+- `.agents/plans/<plan>/TODO.md` — a plan's living checklist (`Status:`,
+  `Provenance:`, `Proof of record:`; `## Done` / `## Uncommitted`; optional
+  `## Decisions` / `## Carried forward`).
+- `.agents/runs/<plan>-<session>/TODO.md` — a parallel workstream's private
+  checklist (`.agents/runs/` is gitignored); append back to the plan and delete
+  the run file when the workstream is committed.
+- Tick an item only after its checks pass, in the same session, on the commit
+  you are marking. The check is the evidence. `[x]` done · `[~]` in progress ·
+  `[ ]` not started · `[!]` blocked outside this repository.
+
 ## Design docs
 
+- `.agents/plans/TODO-SPEC.md` — the plan/TODO rules.
+- `.agents/plans/TODO.md` — the plan ledger; `plans/<plan>/TODO.md` — per-plan
+  checklists.
 - `.agents/plans/DESIGN.md` — goals, architecture, decisions.
 - `.agents/docs/` — `design-decisions.md`, `platform.md`, `core-agent.md`,
   `extensibility.md`, `tui.md`, `roadmap.md`, `ports.md`.
