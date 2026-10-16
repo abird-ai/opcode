@@ -527,7 +527,7 @@ FN theme_name_ok
     test rdi, rdi
     jz .Lnk_no
     xor ecx, ecx
-1:  cmp ecx, 64
+1:  cmp ecx, 65                    # allow the documented {1,64}
     jae .Lnk_no
     movzx eax, byte ptr [rdi + rcx]
     test al, al
@@ -634,10 +634,12 @@ FN theme_join_copy
 # theme_resolve_named(name rdi, out rsi, cap edx) -> eax 1 path found | 0.
 FN theme_resolve_named
     PROLOGUE 32
-    call resources_discover_emit
+    # Save the arguments before the lazy resource-root scan: resources_discover_emit
+    # can run host handlers that clobber the caller-saved rdi/rsi/edx.
     mov r12, rdi
     mov r13, rsi
     mov r14d, edx
+    call resources_discover_emit
     mov rdi, r12
     call theme_name_ok
     test eax, eax
@@ -840,6 +842,8 @@ FN theme_apply_named
     lea rdi, [rbp - 4608]
     lea rsi, [rbp - 320]               # AN_named
     call theme_load_file
+    test eax, eax
+    jz .Lan_fail                    # a corrupt named theme is not a success
     jmp .Lan_resolve
 .Lan_system:
     call theme_system_dark

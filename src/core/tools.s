@@ -528,9 +528,10 @@ FN truncate_head
     test r15, r15
     jz .Lth_done
     mov rdi, [rbx + SB_ptr]
-    # line cut: right after the max_lines-th newline
+    # line cut: right after the max_lines-th newline (max_lines == 0 applies
+    # only the byte cap)
     test r12, r12
-    jz .Lth_cut
+    jz .Lth_nolines
     xor ecx, ecx
     xor r8d, r8d
 .Lth_scan:
@@ -563,11 +564,15 @@ FN truncate_head
     jz .Lth_cut
     cmp byte ptr [rdi + r9 - 1], 10
     je .Lth_cut
+    mov r11, r9                    # byte cut before the line-boundary snap
 .Lth_back:
     dec r9
-    jz .Lth_cut
+    jz .Lth_partial
     cmp byte ptr [rdi + r9 - 1], 10
     jne .Lth_back
+    jmp .Lth_cut
+.Lth_partial:
+    mov r9, r11                    # one line exceeds the byte cap: keep it partial
 .Lth_cut:
     # truncate at r9 and append the marker
     mov [rbx + SB_len], r9

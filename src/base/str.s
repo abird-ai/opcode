@@ -101,6 +101,22 @@ FN str_eq_cstr
     sete al
 3:  ret
 
+# cstr_eq(a cstr, b cstr) -> 1 | 0.  The single comparator shared by every
+# front end (they used to each carry a private copy).
+FN cstr_eq
+1:  mov al, [rdi]
+    cmp al, [rsi]
+    jne 2f
+    test al, al
+    jz 3f
+    inc rdi
+    inc rsi
+    jmp 1b
+2:  xor eax, eax
+    ret
+3:  mov eax, 1
+    ret
+
 # str_starts(a, alen, prefix, plen) -> 1 | 0
 FN str_starts
     xor eax, eax
@@ -183,6 +199,8 @@ FN parse_hex
     xor edx, edx
 1:  cmp rdx, rsi
     jae 3f
+    cmp rdx, 16                 # 64-bit value: never accumulate past 16 digits
+    jae 3f
     movzx ecx, byte ptr [rdi + rdx]
     lea r8d, [rcx - '0']
     cmp r8d, 9
@@ -223,8 +241,16 @@ FN fmt_u64
     add rsp, 32
     ret
 
-# utf8_encode(codepoint, buf) -> rax length 1..4
+# utf8_encode(codepoint, buf) -> rax length 1..4.  Out-of-range codepoints and
+# lone surrogates are encoded as U+FFFD rather than emitting invalid UTF-8.
 FN utf8_encode
+    cmp edi, 0x10FFFF
+    ja .Lue_repl
+    cmp edi, 0xD800
+    jb .Lue_r_ok
+    cmp edi, 0xDFFF
+    jbe .Lue_repl
+.Lue_r_ok:
     cmp edi, 0x80
     jb .Lue_1
     cmp edi, 0x800
@@ -251,6 +277,9 @@ FN utf8_encode
     mov [rsi + 3], al
     mov eax, 4
     ret
+.Lue_repl:
+    mov edi, 0xFFFD
+    jmp .Lue_r_ok
 .Lue_1:
     mov [rsi], dil
     mov eax, 1

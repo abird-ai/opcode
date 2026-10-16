@@ -81,6 +81,7 @@
 .Lempty:       .asciz ""
 .Lunknown_name: .asciz "?"
 .Lempty_obj:   .asciz "{}"
+.Lout_trunc:   .asciz "\n[output truncated]\n"
 .Lcompacted:   .asciz "compacted "
 .Ltokens:      .asciz " tokens\n"
 .Lcfail:       .asciz "compaction failed"
@@ -212,20 +213,7 @@ a_cerr:      .zero 8
 
 .text
 
-# cstr_eq(a, b) -> 1|0 (leaf)
-cstr_eq:
-1:  mov al, [rdi]
-    cmp al, [rsi]
-    jne 2f
-    test al, al
-    jz 3f
-    inc rdi
-    inc rsi
-    jmp 1b
-2:  xor eax, eax
-    ret
-3:  mov eax, 1
-    ret
+# cstr_eq() is the shared base/str.s helper.
 
 # prov_for_api(api cstr rdi) -> PV*: the one <api> -> provider mapping site
 # (ADR-7).  Unknown/missing api falls back to prov_openai, matching the former
@@ -262,20 +250,7 @@ ag_find_slash:
     ret
 3:  ret
 
-# out_cstr(fd, cstr)
-out_cstr:
-    PROLOGUE
-    mov rbx, rdi
-    mov r12, rsi
-    mov rdi, rsi
-    call strlen
-    mov edi, ebx
-    mov rsi, r12
-    mov rdx, rax
-    call write_all
-    EPILOGUE
-
-# err(cstr): "opcode: <msg>\n" to stderr
+# out_cstr is the shared base/log.s helper.  err(cstr): "opcode: <msg>\n" to stderr
 err:
     PROLOGUE
     mov r12, rdi
@@ -613,8 +588,8 @@ agent_sink:
     jmp .Ls_ret
 .Ls_tool_end:
     mov rcx, [rip + a_targs + SB_ptr]
-    test rcx, rcx
-    jnz 1f
+    cmp qword ptr [rip + a_targs + SB_len], 0
+    jne 1f
     lea rcx, [rip + .Lempty_obj]
 1:  mov rdi, [rip + a_msg]
     mov rsi, [rip + a_tool_id]
@@ -934,7 +909,18 @@ agent_job_read:
     js 3f
     jmp 4f
 2:  mov rdi, [r12 + J_out]
-    mov rsi, [rip + a_recbuf]
+    cmp qword ptr [rdi + SB_len], JOB_OUT_MAX
+    jb 21f
+    # At the ceiling: append a one-time marker, then keep draining and
+    # discarding so the child still sees EOF instead of blocking on a full
+    # pipe, and the agent stays bounded.
+    test dword ptr [r12 + J_flags], JF_TRUNC
+    jnz 1b
+    or dword ptr [r12 + J_flags], JF_TRUNC
+    lea rsi, [rip + .Lout_trunc]
+    call sb_push_cstr
+    jmp 1b
+21: mov rsi, [rip + a_recbuf]
     mov rdx, rax
     call sb_push
     jmp 1b
@@ -2048,6 +2034,8 @@ ag_compact_do:
     mov esi, COMPACT_KEEP_TOKENS
     call compact_cut
     mov r14, rax                    # cut
+    test r14, r14
+    jz .Lcm_ret                    # nothing can be compacted from this shape
     lea rdi, [rip + a_cprompt_sb]
     call sb_clear
     lea rdi, [rip + a_cprompt_sb]
@@ -2195,18 +2183,19 @@ agent_finish_turn:
     mov rdi, rbx
     call agent_session_append
     mov eax, [rbx + M_stop]
-    cmp eax, SR_TOOL_USE
-    jne 3f
+    cmp eax, SR_ERROR
+    je 4f
+    cmp eax, SR_ABORTED
+    je 4f
+    # Any other stop with completed tool calls (including a length-truncated
+    # turn) must run them: a tool_use left in the transcript without a matching
+    # tool_result makes the next request invalid.
     mov rdi, rbx
     call msg_toolcalls
     test eax, eax
-    jz 3f
+    jz 5f
     call agent_start_tools
     EPILOGUE
-3:  cmp eax, SR_ERROR
-    je 4f
-    cmp eax, SR_ABORTED
-    jne 5f
 4:  mov dword ptr [rip + a_exit], 1
     mov dword ptr [rip + a_state], AS_ERROR
     EPILOGUE
@@ -2241,6 +2230,14 @@ agent_start_turn:
     call net_close
 7:  mov qword ptr [rip + a_fd], -1
     mov qword ptr [rip + a_conn], 0
+    # a turn aborted mid tool-call can leave the pending name/id behind; drop
+    # them here so they cannot leak and the new turn starts clean
+    mov rdi, [rip + a_tool_id]
+    call mem_free
+    mov rdi, [rip + a_tool_name]
+    call mem_free
+    mov qword ptr [rip + a_tool_id], 0
+    mov qword ptr [rip + a_tool_name], 0
     mov edi, MR_ASSISTANT
     call msg_new
     mov [rip + a_msg], rax
@@ -2370,7 +2367,12 @@ FN agent_init
     call config_str
     mov rsi, rax
     test rsi, rsi
-    jnz 2f
+    jz .Lar_cfg_default
+    cmp byte ptr [rsi], 0
+    jne 2f
+    mov rdi, rsi                  # an empty default_model is unset
+    call mem_free
+.Lar_cfg_default:
     mov rdi, r12
     call catalog_default
     jmp 3f
@@ -2652,6 +2654,15 @@ FN agent_submit
     test eax, eax
     jnz .Lsub_busy
     mov r15, rdi
+    # Copy the prompt before compaction: compact_maybe_run parses JSON and
+    # resets the shared arena, so an arena-backed prompt (the RPC front end
+    # hands one in from json_get_cstr) would dangle by the time we copy it.
+    mov rdi, r15
+    call strlen
+    mov rdi, r15
+    mov rsi, rax
+    call mem_dup
+    mov r15, rax
     # Re-check compaction before every turn (not just once in agent_init) so a
     # long-lived process stays bounded.  agent_busy above guarantees no turn is
     # in flight; compact_maybe_run is a no-op below the threshold.
@@ -2668,6 +2679,8 @@ FN agent_submit
     mov esi, BT_TEXT
     mov rdx, r15
     call msg_add_block
+    mov rdi, r15
+    call mem_free
     lea rdi, [rip + a_tr]
     mov rsi, r13
     call tr_push
@@ -3077,6 +3090,19 @@ FN agent_set_model
     mov rdi, [r15 + MD_api]
     call prov_for_api
     mov rbx, rax
+    # Resolve the auth token before mutating any agent state, so switching to a
+    # model whose provider has no key fails cleanly instead of stranding a
+    # half-swapped agent with a NULL key (auth_key returns an owned copy).
+    xor eax, eax
+    mov [rsp + 256], rax           # new key; stays 0 for MDF_NO_KEY models
+    test dword ptr [r15 + MD_flags], MDF_NO_KEY
+    jnz .Lsm2_have_key
+    mov rdi, [r15 + MD_provider]
+    call auth_key
+    test rax, rax
+    jz .Lsm2_nokey
+    mov [rsp + 256], rax
+.Lsm2_have_key:
 5:  # release the previous provider context, then allocate a fresh one
     mov rax, [rip + a_pvctx]
     test rax, rax
@@ -3099,18 +3125,15 @@ FN agent_set_model
     jnz 7f
     mov ecx, 4096
 7:  mov [rax + 8], ecx
-    # refresh the auth token for the (possibly new) provider.  auth_key()
-    # returns an owned copy, so release the previous key before replacing it.
-    test dword ptr [r15 + MD_flags], MDF_NO_KEY
-    jnz 8f
-    mov rdi, [r15 + MD_provider]
-    call auth_key
-    mov [rsp + 256], rax
+    # install the key only after the context swap succeeded
     mov rdi, [rip + a_key]
     call mem_free
     mov rax, [rsp + 256]
     mov [rip + a_key], rax
-8:  xor eax, eax
+    xor eax, eax
+    EPILOGUE
+.Lsm2_nokey:
+    mov rax, -EACCES
     EPILOGUE
 .Lsm2_einval:
     mov rax, -EINVAL

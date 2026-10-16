@@ -1456,8 +1456,10 @@ FN oauth_sha256
     mov rax, r15
     EPILOGUE
 
-# .Lacc4(fd) -> accepted fd | -errno
+# .Lacc4(fd) -> accepted fd | -errno (no peer address needed)
 .Lacc4:
+    xor esi, esi
+    xor edx, edx
     jmp os_accept
 
 # .Lhdr_end(ptr, n) -> 1|0: "\r\n\r\n" seen
@@ -2327,10 +2329,14 @@ oa_body_cb:
     mov r15, rax
     mov edi, r14d
     call os_fsync
+    mov [rsp], rax              # keep the fsync result across the close
     mov edi, r14d
     call os_close
     test r15, r15
     jnz .Lwa_wfail
+    mov rax, [rsp]
+    test rax, rax
+    js .Lwa_sync_fail
     mov rdi, r13
     mov rsi, rbx
     call os_rename
@@ -2342,6 +2348,9 @@ oa_body_cb:
     call os_unlink
     mov rax, r15
     jmp .Lwa_done
+.Lwa_sync_fail:
+    mov r15, rax                # durability not guaranteed: do not rename
+    jmp .Lwa_wfail
 .Lwa_open_fail:
     mov r15, rax
     jmp .Lwa_wfail
@@ -2357,6 +2366,35 @@ oa_body_cb:
     EPILOGUE
 .Lwa_nomem:
     mov rax, -ENOMEM
+    EPILOGUE
+
+# .Lold_refresh(root JV*, provider cstr) -> rax ptr, rdx len (0,0 when absent).
+# Reads <provider>.oauth.refresh_token from an already-parsed auth store so a
+# token response that omits refresh_token does not wipe the stored one. Does
+# not re-parse, so the caller's arena stays valid.
+.Lold_refresh:
+    PROLOGUE 16
+    test rdi, rdi
+    jz .Lor_none
+    call json_get
+    test rax, rax
+    jz .Lor_none
+    mov rdi, rax
+    lea rsi, [rip + .Lkey_oauth]
+    call json_get
+    test rax, rax
+    jz .Lor_none
+    mov rdi, rax
+    lea rsi, [rip + .Lkey_refresh]
+    call json_get
+    test rax, rax
+    jz .Lor_none
+    mov rdi, rax
+    call json_str
+    EPILOGUE
+.Lor_none:
+    xor eax, eax
+    xor edx, edx
     EPILOGUE
 
 # .Lstore_tokens(provider, access, alen, refresh, rlen, expires_at,
@@ -2391,17 +2429,19 @@ oa_body_cb:
     jz 1f
     mov rdi, rax
     mov esi, 0700
-    call os_mkdir
+    call config_mkdirs
 1:  mov rdi, [rsp + 80]
     lea rsi, [rsp + 56]
     call config_read_file
     test eax, eax
     jz .Lst_emit
+    cmp qword ptr [rsp + 56 + SB_len], 0
+    je .Lst_emit                 # empty file: no existing store to preserve
     mov rdi, [rsp + 56 + SB_ptr]
     mov rsi, [rsp + 56 + SB_len]
     call json_parse
     test rax, rax
-    jz .Lst_bad
+    jz .Lst_emit                 # unparsable store: rebuild it rather than fail
     mov [rsp + 88], rax
 .Lst_emit:
     lea rdi, [rsp + 32]
@@ -2492,6 +2532,19 @@ oa_body_cb:
     mov rsi, r12
     mov rdx, r13
     call jsonw_str
+    # refresh_token: prefer the freshly issued one; when the response omits it
+    # (common on re-auth) carry the stored value, and omit the key entirely when
+    # neither exists, so a subscription token is never silently erased.
+    test r15, r15
+    jnz .Lst_ref_emit
+    mov rdi, [rsp + 88]
+    mov rsi, rbx
+    call .Lold_refresh
+    test rdx, rdx
+    jz .Lst_ref_done
+    mov r14, rax
+    mov r15, rdx
+.Lst_ref_emit:
     lea rdi, [rsp + 32]
     lea rsi, [rip + .Lkey_refresh]
     call jsonw_key
@@ -2499,6 +2552,7 @@ oa_body_cb:
     mov rsi, r14
     mov rdx, r15
     call jsonw_str
+.Lst_ref_done:
     lea rdi, [rsp + 32]
     lea rsi, [rip + .Lkey_exp]
     call jsonw_key
@@ -2623,8 +2677,11 @@ FN oauth_login
     mov [rsp + OL_REDIR], rax
     mov [rsp + OL_AURL], rax
     mov [rsp + OL_ACCESS], rax
+    mov [rsp + OL_ACC_LEN], rax
     mov [rsp + OL_REFRESH], rax
+    mov [rsp + OL_REF_LEN], rax
     mov [rsp + OL_ACCOUNT], rax
+    mov [rsp + OL_ACCT_LEN], rax
     mov [rsp + OL_ROOT], rax
     mov [rsp + OL_XTRA], rax
     mov [rsp + OL_SLEN], rax
@@ -3053,9 +3110,12 @@ FN oauth_login
     lea rsi, [rip + .Lkey_refresh]
     call .Ljson_dup
     mov [rsp + OL_REFRESH], rax
+    test rax, rax
+    jz .Lol_ref_done
     mov rdi, rax
     call strlen
     mov [rsp + OL_REF_LEN], rax
+.Lol_ref_done:
     mov rdi, [rsp + OL_ROOT]
     lea rsi, [rip + .Lkey_acct]
     call .Ljson_dup
@@ -3244,6 +3304,8 @@ FN oauth_logout
     call config_read_file
     test eax, eax
     jz .Lolog_print
+    cmp qword ptr [rsp + OG_OLD + SB_len], 0
+    je .Lolog_print              # empty store: nothing to remove
     mov rdi, [rsp + OG_OLD + SB_ptr]
     mov rsi, [rsp + OG_OLD + SB_len]
     call json_parse

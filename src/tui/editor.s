@@ -1444,6 +1444,12 @@ FN editor_set_ascii
     ja 2f
     add eax, 32
 2:  movzx r9d, byte ptr [rsi + r8]
+    cmp r9d, 'A'
+    jb .Lsq_cmp
+    cmp r9d, 'Z'
+    ja .Lsq_cmp
+    add r9d, 32
+.Lsq_cmp:
     cmp r9d, eax
     jne 3f
     inc r8d
@@ -1929,6 +1935,17 @@ FN editor_history_load
     test eax, eax
     js .Lhl_done
     mov r13d, eax
+    # only a regular file is read: a FIFO or device node must not block the
+    # loader (the stat lands in the read buffer, which the loop then reuses)
+    mov edi, r13d
+    lea rsi, [rsp + LHL_buf]
+    call os_fstat
+    test eax, eax
+    js .Lhl_notreg
+    mov eax, [rsp + LHL_buf + 24]    # st_mode
+    and eax, 0xF000                 # S_IFMT
+    cmp eax, 0x8000                 # S_IFREG
+    jne .Lhl_notreg
     lea rdi, [rsp]
     call .Lsb_zero
 .Lhl_read:
@@ -1994,6 +2011,10 @@ FN editor_history_load
     lea rdi, [rsp]
     call sb_free
     EPILOGUE
+.Lhl_notreg:
+    mov edi, r13d
+    call os_close
+    jmp .Lhl_done
 .Lhl_abort:
     mov edi, r13d
     call os_close
@@ -2040,6 +2061,18 @@ FN editor_paste
     inc r14
     jmp .Lep_norm
 .Lep_plain:
+    # drop C0 controls and DEL so a bracketed paste cannot inject raw escape or
+    # control bytes into the submitted prompt; tab (expanded below) and LF/CR
+    # (handled above) are kept
+    cmp eax, 0x09
+    je .Lep_keep
+    cmp eax, 0x0a
+    je .Lep_keep
+    cmp eax, 0x20
+    jb .Lep_plain_next
+    cmp eax, 0x7f
+    je .Lep_plain_next
+.Lep_keep:
     mov r15d, eax
     lea rdi, [rsp]
     mov esi, eax

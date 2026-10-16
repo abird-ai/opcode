@@ -198,6 +198,49 @@ FN catalog_at
     xor eax, eax
     ret
 
+# catalog_builtin_count() -> n: the generated table only, excluding the
+# user-discovered overlay.  Discovery merges against this so a previous
+# models.jsonc can never seed (or suppress) a fresh probe.
+FN catalog_builtin_count
+    mov rax, [rip + opcode_catalog_count]
+    ret
+
+# catalog_reset_user(): drop the user-discovered table so the next
+# catalog_load_user() re-reads models.jsonc.  Frees every owned string.  Called
+# after a discovery run rewrites the file, keeping the in-memory overlay in
+# step with disk without a restart.
+FN catalog_reset_user
+    PROLOGUE 16
+    mov rbx, [rip + cat_user]
+    test rbx, rbx
+    jz .Lcru_clear
+    xor r12d, r12d
+.Lcru_loop:
+    cmp r12, [rip + cat_user_len]
+    jae .Lcru_free
+    imul rax, r12, MD_SIZE
+    add rax, rbx
+    mov r13, rax
+    mov rdi, [r13 + MD_id]
+    call mem_free
+    mov rdi, [r13 + MD_name]
+    call mem_free
+    mov rdi, [r13 + MD_api]
+    call mem_free
+    mov rdi, [r13 + MD_provider]
+    call mem_free
+    mov rdi, [r13 + MD_base]
+    call mem_free
+    inc r12
+    jmp .Lcru_loop
+.Lcru_free:
+    mov rdi, rbx
+    call mem_free
+.Lcru_clear:
+    mov qword ptr [rip + cat_user], 0
+    mov qword ptr [rip + cat_user_len], 0
+    EPILOGUE
+
 # .Lcu_true(el JV*, key cstr) -> 1 when the key is a JSON true literal
 .Lcu_true:
     PROLOGUE 0

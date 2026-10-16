@@ -373,6 +373,21 @@ FN compact_cut
     dec r15
     jmp .Lcc_adj_loop
 .Lcc_adj_done:
+    # cut == 1 drops message 0; if that is an assistant carrying tool calls its
+    # result would be orphaned, so skip compaction entirely in that rare shape
+    cmp r15, 1
+    ja .Lcc_ret
+    mov rdi, r12
+    xor esi, esi
+    call tr_msg
+    test rax, rax
+    jz .Lcc_ret
+    mov rdi, rax
+    call msg_toolcalls
+    test eax, eax
+    jz .Lcc_ret
+    jmp .Lcc_zero
+.Lcc_ret:
     mov rax, r15
     EPILOGUE
 .Lcc_small:

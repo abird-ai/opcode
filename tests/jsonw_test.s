@@ -17,6 +17,8 @@ jsb: .zero SB_SIZE
 .E_u64max: .asciz "18446744073709551615"
 .E_ctrl:   .byte '"', 0x5c, 'u', '0', '0', '0', '1', '"', 0
 .E_utf8:   .byte '"', 0xc3, 0xa9, '"', 0
+.E_fffd:   .byte '"', 0xef, 0xbf, 0xbd, '"', 0   # one U+FFFD for an invalid byte
+.E_mixed:  .byte '"', 0xc3, 0xa9, 0xef, 0xbf, 0xbd, '"', 0  # valid é then U+FFFD
 .E_empty:  .byte '"', '"', 0
 .E_x:      .asciz "\"x\""
 
@@ -30,6 +32,9 @@ jsb: .zero SB_SIZE
 .S_esc:    .ascii "a\"b\n"                       # a, quote, b, LF
 .S_x:      .asciz "x"
 .S_utf8:   .byte 0xc3, 0xa9
+.S_badutf: .byte 0xff              # invalid lead byte
+.S_trunc:  .byte 0xc3              # truncated 2-byte sequence
+.S_mixed:  .byte 0xc3, 0xa9, 0xff  # valid 2-byte sequence then an invalid byte
 .S_ctrl:   .byte 1
 
 # messages
@@ -262,6 +267,36 @@ FN opcode_main
     call jsonw_str
     mov rdi, r14
     lea rsi, [rip + .E_utf8]
+    call check
+
+    mov rdi, r14
+    call sb_clear
+    mov rdi, r14
+    lea rsi, [rip + .S_badutf]
+    mov edx, 1
+    call jsonw_str
+    mov rdi, r14
+    lea rsi, [rip + .E_fffd]
+    call check
+
+    mov rdi, r14
+    call sb_clear
+    mov rdi, r14
+    lea rsi, [rip + .S_trunc]
+    mov edx, 1
+    call jsonw_str
+    mov rdi, r14
+    lea rsi, [rip + .E_fffd]
+    call check
+
+    mov rdi, r14
+    call sb_clear
+    mov rdi, r14
+    lea rsi, [rip + .S_mixed]
+    mov edx, 3
+    call jsonw_str
+    mov rdi, r14
+    lea rsi, [rip + .E_mixed]
     call check
 
     mov rdi, r14

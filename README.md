@@ -244,9 +244,9 @@ All files are JSONC (comments and trailing commas; unknown keys are ignored):
   `$XDG_DATA_HOME/abird/opcode/sessions/--<sanitized-cwd>--/`; one JSONL entry per
   line, `--continue`/`--resume`/`--session`/`--session-dir`/`--no-session`.
 - **Context files** — `AGENTS.override.md`, `AGENTS.md`, `OPCODE.md`,
-  `CLAUDE.md` from the config dir and every cwd ancestor; `SYSTEM.md` replaces
-  the system-prompt preamble and `APPEND_SYSTEM.md` appends to it (project
-  variants apply only when trusted).
+  `CLAUDE.md` from the config dir and, when the directory is trusted, every cwd
+  ancestor; `SYSTEM.md` replaces the system-prompt preamble and
+  `APPEND_SYSTEM.md` appends to it (project variants apply only when trusted).
 - **Skills** — `<config>/skills/**/SKILL.md` and
   `<cwd>/.opcode/skills/**/SKILL.md`.
 - **Prompt templates** — `<config>/prompts/*.md` and

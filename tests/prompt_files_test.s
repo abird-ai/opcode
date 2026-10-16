@@ -69,6 +69,8 @@ t_tools_vec:
 .Lm_begin:   .asciz "---- prompt begin ----\n"
 .Lm_end:     .asciz "---- prompt end ----\n"
 .Lm_tpl:     .asciz "template: "
+.Lm_marker:  .asciz "Project instruction A."
+.Lm_untrusted: .asciz "project context gated ok\n"
 .Lm_ok:      .asciz "prompt files ok\n"
 .Lm_fail:    .asciz "FAIL prompt_files_test\n"
 
@@ -212,6 +214,31 @@ FN opcode_main
     call prompt_template_expand
     cmp eax, -ENOENT
     jne .Lfail
+
+    # ---- 3. project context is trust-gated ------------------------------
+    # With the directory untrusted the project AGENTS.md must not reach the
+    # prompt; config-dir context files are unaffected.
+    mov qword ptr [rip + g_config_approve], 0
+    lea rdi, [rip + t_sb]
+    call sb_clear
+    lea rdi, [rip + t_sb]
+    lea rsi, [rip + t_tools_vec]
+    lea rdx, [rip + .Lc_proj]
+    call prompt_build
+    test eax, eax
+    jnz .Lfail
+    lea rdi, [rip + .Lm_marker]
+    call strlen
+    mov rcx, rax
+    mov rdi, [rip + t_sb + SB_ptr]
+    mov rsi, [rip + t_sb + SB_len]
+    lea rdx, [rip + .Lm_marker]
+    call str_find
+    test rax, rax
+    jns .Lfail                 # project instruction leaked into an untrusted prompt
+    mov qword ptr [rip + g_config_approve], 1
+    lea rdi, [rip + .Lm_untrusted]
+    call print
 
     lea rdi, [rip + .Lm_ok]
     call print

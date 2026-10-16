@@ -39,6 +39,8 @@
 .equ GC_LINE,       128
 .equ GC_LINELEN,    136
 .equ GC_GLOB_ROOTLEN, 144
+.equ GC_STEPS,       152        # backtracking steps for the current line
+.equ GC_STEP_MAX,    1000000    # bound: a pathological regex degrades, no hang
 
 .section .rodata
 .Lname:    .asciz "grep"
@@ -52,6 +54,7 @@
 .Lliteral:  .asciz "literal"
 .Lcontext:  .asciz "context"
 .Llimit:    .asciz "limit"
+.Ltrunc:    .asciz "\n[truncated: match limit reached]\n"
 .Ldot:      .asciz "."
 .Lgit:      .asciz ".git"
 .Lnode:     .asciz "node_modules"
@@ -406,6 +409,11 @@ FN grep_re_at
     mov rbx, rdi
     mov r12, rsi
     mov r13, rdx
+    # Bound total backtracking per line so a pattern like a*a*a* cannot wedge
+    # the single-threaded agent; on overflow the match degrades to "no match".
+    inc qword ptr [rbx + GC_STEPS]
+    cmp qword ptr [rbx + GC_STEPS], GC_STEP_MAX
+    ja .Lra_no
     mov rax, [rbx + GC_NTOK]
     cmp r12, rax
     jae .Lra_yes
@@ -590,6 +598,7 @@ FN grep_line_match
 .Llm_re:
     mov [rbx + GC_LINE], r12
     mov [rbx + GC_LINELEN], r13
+    mov qword ptr [rbx + GC_STEPS], 0
     xor r12d, r12d
 .Llm_try:
     cmp r12, r13
@@ -887,11 +896,16 @@ FN grep_cb
     mov rdi, rbx
     call strlen
     mov rcx, [r12 + GC_GLOB_ROOTLEN]
+    cmp rax, rcx
+    jbe .Lgcb_whole                 # walk root is this file: subject is the whole path
     lea rdx, [rbx + rcx]            # prefix already includes the separator
     lea rax, [rbx + rax]
     cmp rdx, rax
     ja .Lgcb_ret0
     mov r13, rdx
+    jmp 2f
+.Lgcb_whole:
+    mov r13, rbx
     jmp 2f
 1:  mov rdi, rbx
     call g_basename
@@ -1045,6 +1059,14 @@ FN grep_exec
     mov [rsp + GE_STATUS], rax
     test rax, rax
     js .Lge_err
+    # report a match-limit truncation, as find does
+    mov rax, [rsp + GC_FOUND]
+    cmp rax, [rsp + GC_LIMIT]
+    jb .Lge_done
+    mov rdi, [rsp + GE_JOB]
+    mov rdi, [rdi + J_out]
+    lea rsi, [rip + .Ltrunc]
+    call sb_push_cstr
 .Lge_done:
     mov rdi, [rsp + GC_BUF]
     call sb_free

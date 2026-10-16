@@ -949,6 +949,7 @@
     PROLOGUE 64
     mov r12, rdi
     mov r13, rsi
+    mov dword ptr [rsp + 16], 0     # set when this chunk carries finish_reason
     # [DONE] sentinel (accept trailing whitespace)
     mov rdi, r8
     mov rsi, r9
@@ -999,9 +1000,7 @@
     mov rdi, r12
     mov rsi, r13
     call .Loai_flush_text
-    mov rdi, r12
-    mov rsi, r13
-    call .Loai_close_tools
+    mov dword ptr [rsp + 16], 1     # finalize tools after this chunk's fragments
 .Los_no_finish:
 
     # delta
@@ -1191,7 +1190,15 @@
     xor ecx, ecx
     call .Lsink_emit
 .Los_ret:
-    xor eax, eax
+    # A finish_reason chunk closes its tool calls only after its own deltas
+    # have been folded in, so a final argument fragment is never dropped.
+    cmp dword ptr [rsp + 16], 0
+    je 1f
+    mov dword ptr [rsp + 16], 0
+    mov rdi, r12
+    mov rsi, r13
+    call .Loai_close_tools
+1:  xor eax, eax
     EPILOGUE
 
 # .Lprov_finish(ctx, SS*) -> 0

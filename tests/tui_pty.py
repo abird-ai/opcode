@@ -33,6 +33,11 @@ BIN = os.path.join(ROOT, "build", "opcode")
 COMMON = ["--provider", "anthropic", "--api-key", "test", "--no-session",
           "--replay", os.path.join(ROOT, "tests", "data", "agent_replay.wire")]
 
+# The TUI prompts to trust a cwd that ships project resources.  These tests
+# drive the pickers and modes, not trust, so run opcode in an empty scratch
+# cwd; main() points this at a fresh directory under its hermetic temp root.
+RUN_CWD = None
+
 ALT_ON = b"\x1b[?1049h"
 ALT_OFF = b"\x1b[?1049l"
 PARK = b"\x1b[1G\x1b[?25l\x1b[?7h"
@@ -174,7 +179,7 @@ def run(extra, steps, sigs=(), cols=80, rows=8, timeout=25):
     master, slave = pty.openpty()
     fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
     proc = subprocess.Popen([BIN] + extra + COMMON, stdin=slave, stdout=slave,
-                            stderr=slave, close_fds=True)
+                            stderr=slave, cwd=RUN_CWD, close_fds=True)
     os.close(slave)
     out = b""
     step = 0
@@ -246,11 +251,14 @@ def committed_once(text):
 
 
 def main():
+    global RUN_CWD
     tmp = tempfile.mkdtemp(prefix="opcode-tui-pty-")
     os.environ["XDG_CONFIG_HOME"] = os.path.join(tmp, "config")
     os.environ["XDG_STATE_HOME"] = os.path.join(tmp, "state")
     os.makedirs(os.environ["XDG_CONFIG_HOME"], exist_ok=True)
     os.makedirs(os.environ["XDG_STATE_HOME"], exist_ok=True)
+    RUN_CWD = os.path.join(tmp, "cwd")
+    os.makedirs(RUN_CWD, exist_ok=True)
     results = []
 
     def check(name, ok):

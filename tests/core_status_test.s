@@ -31,6 +31,7 @@ t_usage: .zero USAGE_SIZE
 .Lid_slash: .asciz "anthropic/claude-sonnet-4-5"
 .Lid_bare:  .asciz "claude-haiku-4-5"
 .Lid_bad:   .asciz "definitely-not-a-real-model"
+.Ltest_key: .asciz "test-key"
 .Lname_medium: .asciz "medium"
 .Lname_high:   .asciz "high"
 .Lname_off:    .asciz "off"
@@ -212,6 +213,10 @@ FN opcode_main
     lea rax, [rip + .Lcfg]
     mov [rip + g_config_home], rax
     mov qword ptr [rip + g_config_approve], 1
+    # A keyed provider must have a credential before agent_set_model accepts a
+    # switch to it (mirrors agent_init); supply a dummy flag key for the test.
+    lea rdi, [rip + .Ltest_key]
+    call auth_set_flag
 
     # ---- thinking --------------------------------------------------------
     call agent_thinking

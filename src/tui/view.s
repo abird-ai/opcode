@@ -304,14 +304,21 @@ FN view_row_text
     add rax, [rdi + Vdata]
     ret
 
-# view_row_len(v, i) -> len (partial last row uses Vlast)
+# view_row_len(v, i) -> len (partial last row uses Vlast; i beyond the last
+# row is empty, so a cleared or shrunk view never repaints stale rows).
 FN view_row_len
-    cmp esi, [rdi + Vrows]
-    jne 1f
+    mov eax, [rdi + Vrows]
+    cmp esi, eax
+    je .Lvrl_last
+    ja .Lvrl_none
+    mov rax, [rdi + Vlen]
+    movzx eax, word ptr [rax + rsi*2]
+    ret
+.Lvrl_last:
     mov eax, [rdi + Vlast]
     ret
-1:  mov rax, [rdi + Vlen]
-    movzx eax, word ptr [rax + rsi*2]
+.Lvrl_none:
+    xor eax, eax
     ret
 
 # view_row_bg(v, i) -> eax: band colour of a committed row (0 = terminal bg)
@@ -444,7 +451,17 @@ FN view_draw
     # band first; text then draws on top with the same bg so the SGR the
     # tail erase uses carries the band to the terminal's right edge.
     mov rcx, [r12 + Vrowbg]
+    cmp eax, [r12 + Vrows]
+    ja .Lvd_noband             # beyond the last row: blank, no stale band
+    jne .Lvd_banded
+    mov eax, [r12 + Vbg]        # in-progress row: pending band, Vrowbg is unset
+    jmp .Lvd_band_done
+.Lvd_banded:
     mov eax, [rcx + rax*4]      # row band (0 = none)
+    jmp .Lvd_band_done
+.Lvd_noband:
+    xor eax, eax
+.Lvd_band_done:
     mov [rsp + 64], eax
     test eax, eax
     jnz 1f

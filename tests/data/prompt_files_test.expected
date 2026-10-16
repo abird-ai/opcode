@@ -32,4 +32,5 @@ The following skills provide specialized instructions. Read a skill's file when 
 - date: 2000-02-29
 ---- prompt end ----
 template: Hello there and world from there
+project context gated ok
 prompt files ok

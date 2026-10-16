@@ -505,8 +505,8 @@ FN config_trust_save
     jz .Lcts_err_noent
     mov r12, rax
     mov rdi, r12
-    mov esi, 0700                  # config dir: only the user (holds api_keys)
-    call os_mkdir
+    mov esi, 0700
+    call config_mkdirs            # config dir: only the user (holds api_keys)
     mov rdi, r12
     lea rsi, [rip + .Ltrust_name]
     call config_path_join
@@ -633,40 +633,48 @@ FN config_trust_save
     EPILOGUE
 
 # ---------------------------------------------------------------------------
-# cfg_mkdirs(path cstr) -> 0.  Best-effort mkdir -p: every '/'-terminated
-# prefix is created 0755 and the full path 0700 (the opcode config dir can hold
-# api_keys). EEXIST is ignored. A relative path works too.
-cfg_mkdirs:
-    PROLOGUE 512
+# config_mkdirs(path cstr, mode) -> 0.  Best-effort mkdir -p: every
+# '/'-terminated prefix is created 0755 and the final component gets `mode`
+# (the config dir passes 0700 because it holds api_keys; session/state dirs
+# pass 0755). EEXIST is ignored. A relative path works too. The path is copied
+# to the heap first, so an arbitrarily long XDG/HOME value cannot overflow a
+# fixed frame; every layer that creates a nested directory calls this instead
+# of a bare mkdir so components like <xdg>/abird/opcode are always created.
+FN config_mkdirs
+    PROLOGUE 16
+    test rdi, rdi
+    jz .Lmk_out
+    mov r14d, esi                  # final component mode
     mov rbx, rdi
-    xor ecx, ecx
-.Lmk_copy:
-    mov al, [rbx + rcx]
-    mov [rsp + rcx], al
-    test al, al
-    jz .Lmk_copied
-    inc ecx
-    jmp .Lmk_copy
-.Lmk_copied:
+    call strlen
+    test rax, rax
+    jz .Lmk_out
+    mov rdi, rbx
+    mov rsi, rax
+    call mem_dup
+    mov r12, rax
     mov r13d, 1
 .Lmk_loop:
-    movzx eax, byte ptr [rsp + r13]
+    movzx eax, byte ptr [r12 + r13]
     test al, al
     jz .Lmk_final
     cmp al, '/'
     jne .Lmk_next
-    mov byte ptr [rsp + r13], 0
-    mov rdi, rsp
+    mov byte ptr [r12 + r13], 0
+    mov rdi, r12
     mov esi, 0755
     call os_mkdir
-    mov byte ptr [rsp + r13], '/'
+    mov byte ptr [r12 + r13], '/'
 .Lmk_next:
     inc r13
     jmp .Lmk_loop
 .Lmk_final:
-    mov rdi, rsp
-    mov esi, 0700
+    mov rdi, r12
+    mov esi, r14d
     call os_mkdir
+    mov rdi, r12
+    call mem_free
+.Lmk_out:
     xor eax, eax
     EPILOGUE
 
@@ -1107,7 +1115,8 @@ FN config_save
     jz .Lcsave_noent
     mov r14, rax
     mov rdi, r14
-    call cfg_mkdirs
+    mov esi, 0700
+    call config_mkdirs
     mov rdi, r14
     lea rsi, [rip + .Lconfig_name]
     call config_path_join
@@ -1198,9 +1207,12 @@ FN config_save
 
 # config_provider_at(i) -> mem_alloc'd cstr | 0.  i-th key of the effective
 # "providers" object (project first, then user), for `opcode models --refresh`.
+# The user half is indexed by (i - project count), so enumeration walks the two
+# objects as one contiguous list regardless of how many keys each holds.
 FN config_provider_at
     PROLOGUE 64
     mov r12d, edi
+    mov qword ptr [rsp], 0          # project provider count (0 unless found)
     mov rdi, [rip + cfg_proj]
     test rdi, rdi
     jz .Lcpa_user
@@ -1216,7 +1228,9 @@ FN config_provider_at
     cmp dword ptr [rax + JV_type], JT_OBJ
     jne .Lcpa_user
     mov r13, rax
-    cmp r12d, [r13 + JV_n]
+    mov ecx, [r13 + JV_n]
+    mov [rsp], rcx
+    cmp r12d, ecx
     jae .Lcpa_user
     mov rax, [r13 + JV_ptr]
     mov rcx, r12
@@ -1244,10 +1258,12 @@ FN config_provider_at
     cmp dword ptr [rax + JV_type], JT_OBJ
     jne .Lcpa_none
     mov r13, rax
-    cmp r12d, [r13 + JV_n]
+    mov rcx, r12                    # i - project count
+    sub rcx, [rsp]
+    mov eax, [r13 + JV_n]
+    cmp rcx, rax
     jae .Lcpa_none
     mov rax, [r13 + JV_ptr]
-    mov rcx, r12
     shl rcx, 4
     mov rdi, [rax + rcx]
     mov rsi, [rdi + JV_ptr]

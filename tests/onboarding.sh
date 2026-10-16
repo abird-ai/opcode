@@ -96,6 +96,10 @@ import fcntl, os, pty, select, signal, subprocess, sys, termios, time
 BIN, TMP = sys.argv[1], sys.argv[2]
 LFLAGS = termios.ICANON | termios.ECHO | termios.ISIG
 fail = 0
+# The interactive TUI prompts to trust a cwd that ships project resources; run
+# every guest in an empty scratch cwd so onboarding, not trust, is under test.
+RUN_CWD = os.path.join(TMP, "cwd")
+os.makedirs(RUN_CWD, exist_ok=True)
 
 def say(name, ok, detail=""):
     global fail
@@ -144,7 +148,7 @@ def spawn(args, home):
     master, slave = pty.openpty()
     proc = subprocess.Popen([BIN] + args, stdin=slave, stdout=slave,
                             stderr=slave, env=env_for(home), close_fds=True,
-                            preexec_fn=controlling_tty(slave))
+                            cwd=RUN_CWD, preexec_fn=controlling_tty(slave))
     os.close(slave)
     return master, proc
 
@@ -257,7 +261,7 @@ os.makedirs(home2)
 master, slave = pty.openpty()
 before = termios.tcgetattr(slave)
 proc = subprocess.Popen([BIN], stdin=slave, stdout=slave, stderr=slave,
-                        env=env_for(home2), close_fds=True,
+                        env=env_for(home2), close_fds=True, cwd=RUN_CWD,
                         preexec_fn=controlling_tty(slave))
 out = read_until(master, b"Choose a provider", 15)
 os.write(master, b"\x1b\x1b")

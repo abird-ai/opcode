@@ -28,6 +28,11 @@ REPLAY = os.path.join(ROOT, "tests", "data", "agent_replay.wire")
 COMMON = ["--provider", "anthropic", "--api-key", "test", "--no-session",
           "--replay", REPLAY]
 
+# The TUI prompts to trust a cwd that ships project resources.  These tests
+# exercise terminal state, not trust, so run opcode in an empty scratch cwd;
+# main() points this at a fresh directory under its hermetic temp root.
+RUN_CWD = None
+
 LFLAG_MASK = termios.ICANON | termios.ECHO | termios.ISIG
 CURSOR_ON = b"\x1b[?25h"
 ALT_ON = b"\x1b[?1049h"
@@ -53,7 +58,7 @@ class Session:
         self.initial = termios.tcgetattr(self.slave)
         self.proc = subprocess.Popen([BIN] + extra + COMMON, stdin=self.slave,
                                      stdout=self.slave, stderr=self.slave,
-                                     close_fds=True)
+                                     cwd=RUN_CWD, close_fds=True)
         self.out = b""
         self.raw = False
 
@@ -167,6 +172,7 @@ def scenario(name, extra, act, expect_rc, expect_tail, extra_check=None):
 
 
 def main():
+    global RUN_CWD
     # A user config can pin default_provider/default_model and silently override
     # --provider; isolate config and state so the suite is deterministic here
     # and in CI, exactly as tests/tui.sh does.
@@ -176,6 +182,8 @@ def main():
     os.environ["XDG_STATE_HOME"] = os.path.join(tmp, "state")
     os.makedirs(os.environ["XDG_CONFIG_HOME"], exist_ok=True)
     os.makedirs(os.environ["XDG_STATE_HOME"], exist_ok=True)
+    RUN_CWD = os.path.join(tmp, "cwd")
+    os.makedirs(RUN_CWD, exist_ok=True)
     # run.sh/the Makefile set EMULATOR to the user-mode emulator (qemu-*) for a
     # cross target; Wine never reaches this suite (its PTY checks are skipped).
     emulator = os.environ.get("EMULATOR", "")

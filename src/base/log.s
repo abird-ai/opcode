@@ -40,6 +40,20 @@ FN write_all
 .Lwa_out:
     EPILOGUE
 
+# out_cstr(fd, cstr) -> 0 | -errno: write a NUL-terminated string.  The single
+# definition shared by the front ends that used to each carry a private copy.
+FN out_cstr
+    PROLOGUE 0
+    mov rbx, rdi
+    mov r12, rsi
+    mov rdi, rsi
+    call strlen
+    mov edi, ebx
+    mov rsi, r12
+    mov rdx, rax
+    call write_all
+    EPILOGUE
+
 # log_write(ptr, len) -> 0 | -errno (fd 2)
 FN log_write
     mov rdx, rsi

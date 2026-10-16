@@ -1,5 +1,6 @@
 # login.s: opcode login|logout [provider] [--oauth-* flags]
 .include "opcode.inc"
+.include "core/core.inc"
 
 .section .rodata
 .Lopt_auth:    .asciz "--oauth-auth-url"
@@ -26,32 +27,7 @@ l_manual:   .zero 8
 
 .text
 
-# cstr_eq (leaf)
-cstr_eq:
-1:  mov al, [rdi]
-    cmp al, [rsi]
-    jne 2f
-    test al, al
-    jz 3f
-    inc rdi
-    inc rsi
-    jmp 1b
-2:  xor eax, eax
-    ret
-3:  mov eax, 1
-    ret
-
-out_cstr:
-    PROLOGUE
-    mov rbx, rdi
-    mov r12, rsi
-    mov rdi, rsi
-    call strlen
-    mov edi, ebx
-    mov rsi, r12
-    mov rdx, rax
-    call write_all
-    EPILOGUE
+# cstr_eq() and out_cstr() are the shared base/str.s and base/log.s helpers.
 
 # opcode_login_main(argc, argv) -> exit code; argv[0] is "login" or "logout"
 FN opcode_login_main
@@ -61,6 +37,7 @@ FN opcode_login_main
     mov r13, [r14]              # command cstr
     lea rax, [rip + .Ldef_prov]
     mov [rip + l_provider], rax
+    mov qword ptr [rip + l_manual], 0
     mov r12, 0
 .Lll_loop:
     inc r12
@@ -161,9 +138,17 @@ FN opcode_login_main
     test rax, rax
     js .Lll_fail
     # make the provider just authenticated the default, so the next plain
-    # start uses it (config_save merges, preserving every other key)
+    # start uses it (config_save merges, preserving every other key).  Also set
+    # the provider's catalog default model when one exists, so the next plain
+    # start is not left resolving an empty default_model.
     mov rdi, [rip + l_provider]
-    lea rsi, [rip + .Lempty]
+    call catalog_default
+    test rax, rax
+    jz 8f
+    mov rsi, [rax + MD_id]
+    jmp 9f
+8:  lea rsi, [rip + .Lempty]
+9:  mov rdi, [rip + l_provider]
     xor edx, edx
     call config_save
     test rax, rax

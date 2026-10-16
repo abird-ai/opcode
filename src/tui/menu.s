@@ -942,11 +942,12 @@ FN menu_key
 1:  mov [rip + .Lmenu_state + M_sel], eax
     jmp .Lmk_yes
 .Lmkm_pgdn:
+    mov ecx, [rip + .Lmenu_state + M_count]
+    test ecx, ecx
+    jz .Lmk_yes                # empty list: nothing to select
     mov eax, [rip + .Lmenu_state + M_sel]
     add eax, MENU_VISIBLE_MAX
-    mov ecx, [rip + .Lmenu_state + M_count]
     dec ecx
-    js 1f
     cmp eax, ecx
     jle 1f
     mov eax, ecx

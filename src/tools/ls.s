@@ -23,6 +23,7 @@
 .Ltool_limit: .asciz "limit"
 .Ldot:        .asciz "."
 .Lcolon_nl:   .asciz ":\n"
+.Ltrunc:      .asciz "\n[truncated: entry limit reached]\n"
 .Lerr_errno:  .asciz " (errno "
 .Lrparen:     .asciz ")"
 .Lerr_open:   .asciz "error: cannot open "
@@ -581,6 +582,7 @@ FN search_err
 .equ LE_N, 32
 .equ LE_I, 40
 .equ LE_ERR, 48
+.equ LE_CAPPED, 56
 FN ls_exec
     PROLOGUE 64
     mov [rsp + LE_JOB], rdi
@@ -611,11 +613,11 @@ FN ls_exec
     mov [rsp + LE_VEC], rax
     mov rdi, [rsp + LE_PATH]
     mov rsi, rax
-    mov rdx, [rsp + LE_LIMIT]
     mov edx, LS_ENTRY_CAP            # read enough to sort correctly; caps memory
     call search_dir_read
     test rax, rax
     js .Lls_err
+    mov [rsp + LE_CAPPED], rax       # 1 = entry cap hit, more entries exist
     mov rdi, [rsp + LE_VEC]
     call search_sort
     mov rbx, [rsp + LE_JOB]
@@ -661,7 +663,18 @@ FN ls_exec
     inc qword ptr [rsp + LE_I]
     jmp .Lls_loop
 .Lls_done:
-    mov rdi, [rsp + LE_VEC]
+    # report when the listing was cut short (user limit or the 20000-entry cap)
+    mov rax, [rsp + LE_VEC]
+    mov rax, [rax + VEC_len]
+    cmp rax, [rsp + LE_N]
+    ja 8f
+    cmp qword ptr [rsp + LE_CAPPED], 0
+    je 9f
+8:  mov rdi, [rsp + LE_JOB]
+    mov rdi, [rdi + J_out]
+    lea rsi, [rip + .Ltrunc]
+    call sb_push_cstr
+9:  mov rdi, [rsp + LE_VEC]
     call search_vec_free
     mov rdi, [rsp + LE_JOB]
     call tool_done

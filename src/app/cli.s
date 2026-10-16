@@ -64,6 +64,7 @@
 .Lerr_prompt:   .asciz "opcode: missing prompt\n"
 .Lerr_tmpl:     .asciz "opcode: template not found: "
 .Lerr_session:  .asciz "opcode: session not found\n"
+.Lerr_cancel:   .asciz "opcode: resume cancelled\n"
 .Lusage:
     .ascii "usage: opcode [options] [PROMPT]\n"
     .ascii "  --provider P --model M --api-key K --base-url U [--system S]\n"
@@ -678,8 +679,13 @@ FN cli_open_session
     call session_find_id
     test rax, rax
     jz .Lcs_missing
+    mov [rsp + 104], rax            # owned path: free it whether or not open works
     mov rdi, rax
     call session_open
+    mov [rsp + 112], rax
+    mov rdi, [rsp + 104]
+    call mem_free
+    mov rax, [rsp + 112]
 2:  test rax, rax
     jz .Lcs_missing
     mov [rip + g_agent_session], rax
@@ -690,8 +696,13 @@ FN cli_open_session
     call session_find_latest
     test rax, rax
     jz .Lcs_new
+    mov [rsp + 104], rax            # owned path: free it whether or not open works
     mov rdi, rax
     call session_open
+    mov [rsp + 112], rax
+    mov rdi, [rsp + 104]
+    call mem_free
+    mov rax, [rsp + 112]
     test rax, rax
     jz .Lcs_missing
     mov [rip + g_agent_session], rax
@@ -763,7 +774,7 @@ FN cli_open_session
     call mem_free
     mov rax, [rsp + 96]
     test rax, rax
-    js .Lcsr_new
+    js .Lcsr_cancel              # Esc in the picker: do not silently start fresh
     cmp rax, [rsp + 72]
     jae .Lcsr_new
     mov rdi, [rsp + 64]
@@ -781,6 +792,14 @@ FN cli_open_session
     mov rdi, [rsp + 64]
     call session_recent_free
     jmp .Lcs_new
+.Lcsr_cancel:
+    mov rdi, [rsp + 64]
+    call session_recent_free
+    lea rsi, [rip + .Lerr_cancel]
+    mov edi, 2
+    call cl_out
+    mov eax, 1
+    EPILOGUE
 .Lcsr_fail:
     mov rdi, [rsp + 64]
     call session_recent_free

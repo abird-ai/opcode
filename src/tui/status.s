@@ -813,10 +813,11 @@ status_draw_text:
     mov [rbp + SD_cons], rdx
     mov edi, eax
     call utf8_wcwidth
-    test eax, eax
-    jnz 2f
-    mov eax, 1
-2:  mov [rbp + SD_w], eax
+    mov [rbp + SD_w], eax          # 0 for combining/zero-width, matching status_text_width
+    mov ecx, r12d                  # a glyph that would cross the region end is
+    add ecx, eax                   # dropped, never overshot by a wide glyph
+    cmp ecx, r14d
+    ja 9f
     mov rax, [rbp + SD_cons]
     add [rbp + SD_text], rax
     sub [rbp + SD_rem], rax

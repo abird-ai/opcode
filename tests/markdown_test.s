@@ -16,6 +16,8 @@ fail:     .zero 4
 .Lbad:     .asciz " FAIL\n"
 .inl:      .ascii "a **b** `c` *d*"
 .inl_len = . - .inl
+.inl_us:   .ascii "foo_bar_baz"
+.inl_us_len = . - .inl_us
 .doc1:     .ascii "# H1\n## H2\n### H3\n"
 .doc1_len = . - .doc1
 .bul:      .ascii "- item\n"
@@ -53,6 +55,7 @@ fail:     .zero 4
 .ni_bold:  .asciz "inline.bold"
 .ni_code:  .asciz "inline.code"
 .ni_ital:  .asciz "inline.italic"
+.ni_und:   .asciz "inline.underscore"
 .nh_count: .asciz "heading.count"
 .nh_kind:  .asciz "heading.kind"
 .nh_h1:    .asciz "heading.h1"
@@ -205,6 +208,18 @@ FN opcode_main
     sete al
     movzx esi, al
     lea rdi, [rip + .ni_ital]
+    call expect
+
+    # intraword underscore is literal: foo_bar_baz is one segment
+    lea rdi, [rip + .inl_us]
+    mov esi, .inl_us_len
+    lea rdx, [rip + segs]
+    mov ecx, 64
+    call parse_inline
+    cmp eax, 1
+    sete al
+    movzx esi, al
+    lea rdi, [rip + .ni_und]
     call expect
 
     # 2. headings 80 cols

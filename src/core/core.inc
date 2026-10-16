@@ -155,6 +155,10 @@ ENDSTRUCT PV_SIZE
 .equ MF_ERROR, 1
 .equ JF_ERROR, 1
 .equ JF_TIMEOUT, 2        # the loop's watchdog killed the child
+.equ JF_TRUNC, 4          # async tool output exceeded JOB_OUT_MAX and was dropped
+# Per-job ceiling on captured stdout/stderr. Beyond it bytes are drained and
+# discarded so a runaway command (yes, cat /dev/zero) cannot OOM the agent.
+.equ JOB_OUT_MAX, (8 * 1024 * 1024)
 
 .equ JS_NEW,     0
 .equ JS_RUNNING, 1

@@ -75,20 +75,7 @@ f_method_set:   .zero 4
 
 .text
 
-# cstr_eq(a, b) -> 1|0 (leaf)
-cstr_eq:
-1:  mov al, [rdi]
-    cmp al, [rsi]
-    jne 2f
-    test al, al
-    jz 3f
-    inc rdi
-    inc rsi
-    jmp 1b
-2:  xor eax, eax
-    ret
-3:  mov eax, 1
-    ret
+# cstr_eq() is the shared base/str.s helper.
 
 # out_cstr(fd, cstr)
 FN f_out_cstr

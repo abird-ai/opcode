@@ -8,4 +8,5 @@ FN _start
     call os_init
     call opcode_main
     mov edi, eax
-    jmp os_exit
+    call os_exit                   # call entry keeps the ABI stack alignment
+    ud2

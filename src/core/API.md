@@ -291,7 +291,8 @@ prompt_template_expand(name cstr, args cstr, out SB*) -> 0|-ENOENT
 
 `prompt_build` gains, in order after `rules`:
 `addendum` (APPEND_SYSTEM.md), `project_context` (context files found in the config
-dir and every cwd ancestor, wrapped in `<project_instructions path="...">`),
+dir, plus every cwd ancestor when the directory is trusted, wrapped in
+`<project_instructions path="...">`),
 `skills` (`<available_skills>` from `<config>/skills`, `<cwd>/.opcode/skills`
 and any `resources_discover` skill root), then `cwd`. A plugin descriptor with
 `TL_PROMPT` also supplies its `TL_snippet` as the `# Tools` line and its
@@ -393,7 +394,7 @@ are reported separately and are **not** part of the total.
 ## Model switching
 
 ```text
-agent_set_model(rsi id cstr) -> 0 | -EINVAL
+agent_set_model(rsi id cstr) -> 0 | -EINVAL | -EACCES
 ```
 
 The id is the **second** argument register (`rsi`), again mirroring the

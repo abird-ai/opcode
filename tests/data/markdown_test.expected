@@ -2,6 +2,7 @@ inline.count ok
 inline.bold ok
 inline.code ok
 inline.italic ok
+inline.underscore ok
 heading.count ok
 heading.kind ok
 heading.h1 ok

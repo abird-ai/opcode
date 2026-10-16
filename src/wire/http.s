@@ -58,6 +58,8 @@ F R_flags, 4
 F R_ver_minor, 4
 F R_hex_digits, 4
 F R_trailer_len, 4
+F R_ext_len, 4
+F R_pad, 4
 F R_hdrs, 1024
 ENDSTRUCT R_SIZE
 
@@ -121,14 +123,27 @@ FN http_req_begin
     EPILOGUE
 
 # http_req_header(sb, name cstr, value ptr, value_len) -> 0 | -EINVAL
-# The value is rejected (nothing is appended) if it contains CR or LF: either
-# would terminate the line and have the remainder parsed as a new header.
+# The name and the value are each rejected (nothing is appended) if they
+# contain CR or LF: either would terminate the line and have the remainder
+# parsed as a new header or a request line.
 FN http_req_header
     PROLOGUE 0
     mov rbx, rdi
     mov r12, rsi
     mov r13, rdx
     mov r14, rcx
+    xor eax, eax
+.Lrh_nscan:
+    movzx ecx, byte ptr [r12 + rax]
+    test cl, cl
+    jz .Lrh_val
+    cmp ecx, 13
+    je .Lrh_bad
+    cmp ecx, 10
+    je .Lrh_bad
+    inc rax
+    jmp .Lrh_nscan
+.Lrh_val:
     xor eax, eax
 .Lrh_scan:
     cmp rax, r14
@@ -410,6 +425,7 @@ FN http_resp_feed
 .Lcs_semi:
     cmp dword ptr [rbx + R_hex_digits], 0
     je .Lfeed_err_chunk
+    mov dword ptr [rbx + R_ext_len], 0   # start counting the extension line
     mov qword ptr [rbx + R_state], S_CHUNK_EXT
     inc r12
     dec r13
@@ -434,6 +450,9 @@ FN http_resp_feed
 .Lfeed_chunk_ext:
     test r13, r13
     jz .Lfeed_ret
+    inc dword ptr [rbx + R_ext_len]        # extensions are ignored, but bounded
+    cmp dword ptr [rbx + R_ext_len], 8192
+    ja .Lfeed_err_chunk
     cmp byte ptr [r12], 10
     je .Lce_lf
     inc r12
@@ -834,6 +853,13 @@ FN http_resp_feed
 .Lph_body_check:
     test dword ptr [rbx + R_flags], RF_NO_BODY
     jnz .Lph_no_body
+    # Content-Length and Transfer-Encoding together is ambiguous framing
+    # (RFC 9112 6.3): reject rather than let chunked silently win.
+    test dword ptr [rbx + R_flags], RF_HAS_CL
+    jz .Lph_no_te_conflict
+    test dword ptr [rbx + R_flags], RF_CHUNKED
+    jnz .Lph_bad_header
+.Lph_no_te_conflict:
     test dword ptr [rbx + R_flags], RF_CHUNKED
     jnz .Lph_chunked
     test dword ptr [rbx + R_flags], RF_HAS_CL

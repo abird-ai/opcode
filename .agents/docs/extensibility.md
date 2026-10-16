@@ -168,6 +168,8 @@ Still **not implemented** in the host/ABI:
 
 - `set_status`/`set_title` have no effect (both are no-ops); `session_id`,
   `session_file` and `system_prompt` return 0.
+- `shutdown` is never called: the host has no plugin teardown pass, so a plugin
+  that needs cleanup should not rely on it.
 - Hook-bus event dispatch: apart from `resources_discover`, `on_event`
   registrations are recorded in `opcode_host_events` but never invoked, and
   `tool_call` vetoing is not wired.

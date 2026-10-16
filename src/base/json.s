@@ -21,6 +21,9 @@ jend:       .quad 0             # end of the input
 jstart:     .quad 0             # start of the input (for the BOM check)
 jdepth:     .long 0
 jfail:      .long 0
+.globl json_generation
+json_generation: .quad 0      # bumped on every reset; lets callers cache a
+                              # JV* safely by tagging it with this value
 
 CSTR lit_true, "true"
 CSTR lit_false, "false"
@@ -82,6 +85,7 @@ FN json_reset
 .Ljr_done:
     mov qword ptr [rip + arena_top], 8
     mov qword ptr [rip + stk + VEC_len], 0
+    inc qword ptr [rip + json_generation]
     EPILOGUE
 
 # skip_ws(): advance jp over spaces/tabs/newlines/CR, // line comments,
