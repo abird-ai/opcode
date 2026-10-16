@@ -317,7 +317,13 @@ the session model — are inspired by it.
 
 See [THIRD_PARTY.md](THIRD_PARTY.md) for the specific adaptations.
 
+## AI disclosure
+
+**Human-centric design. AI-centric implementation.** Opcode is built with extensive AI assistance for research, code, and tests. Humans lead the architecture, priorities, and acceptance criteria. We neither hand over direction to autonomous models nor claim that every generated line is manually reviewed. We rely on explicit designs, reproducible tests, engineering evidence, and continuous validation.
+
 ## License
 
-MIT — see [LICENSE](LICENSE). Vendored mbedTLS, the CA bundle and the adapted
-base files are documented in [THIRD_PARTY.md](THIRD_PARTY.md).
+[MIT](LICENSE) © 2026 Prasanna Loganathar and contributors. Opcode-authored text
+and software are MIT-licensed. Vendored third-party components (mbedTLS, the CA
+bundle and the adapted base files) and other assets retain their respective
+upstream licenses; see [THIRD_PARTY.md](THIRD_PARTY.md).
