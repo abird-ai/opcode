@@ -313,6 +313,10 @@ FN read_exec
     mov rdx, [rsp + 8]
     mov ecx, READ_MAX_BYTES
     call kept_lines
+    test rax, rax
+    jnz .Lre_kept_ok
+    mov eax, 1                      # first line alone exceeds the byte cap:
+.Lre_kept_ok:                       # advance one line so the hint always progresses
     add rax, r15                     # next page = offset + lines kept
     mov rsi, rax
     lea rdi, [rsp + 16]

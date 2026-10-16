@@ -35,15 +35,18 @@ FN os_getsockname
 # os_setsockopt(fd, level, optname, val_ptr, val_len) -> 0 | -errno
 # Layer 0 for the OAuth loopback server: level/optname are the Linux numbers
 # (SOL_SOCKET/SO_REUSEADDR, IPPROTO_IPV6/IPV6_V6ONLY in plat.inc); the Darwin
-# and Win32 shims translate the namespace at the syscall boundary.
+# and Win32 shims translate the namespace at the syscall boundary.  The kernel
+# takes val_ptr in r10 (the 4th syscall argument), so move it out of the
+# portable-ABI rcx before the call.
 FN os_setsockopt
+    mov r10, rcx
     SYS SYS_setsockopt
     ret
 
-# os_accept(fd) -> accepted fd | -errno (accept4 with SOCK_CLOEXEC)
+# os_accept(fd, addr, addrlen*) -> accepted fd | -errno (accept4 with
+# SOCK_CLOEXEC).  addr/addrlen* are passed through; pass NULL/0 when the peer
+# address is not needed.
 FN os_accept
-    xor esi, esi
-    xor edx, edx
     mov r10d, SOCK_CLOEXEC
     SYS SYS_accept4
     ret

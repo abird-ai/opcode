@@ -169,7 +169,7 @@ FN os_wait
     and edx, 1                      # nohang != 0 -> WNOHANG
     mov rsi, rsp                    # &status
     xor r10d, r10d                  # rusage = NULL
-    SYS SYS_wait4
+1:  SYS SYS_wait4
     test rax, rax
     js .Low_err
     jz .Low_running
@@ -199,6 +199,8 @@ FN os_wait
     leave
     ret
 .Low_eintr:
+    cmp rax, -EINTR
+    je 1b                          # a signal must not be mistaken for a status
     mov rax, -1
     leave
     ret
@@ -210,8 +212,15 @@ FN os_kill
 
 # os_kill_group(pid, sig) -> 0 | -errno: signal the process group led by pid
 # (os_spawn puts every child in its own group). Used to stop a tool's whole
-# process tree; a negative pid is understood by every supported kernel.
+# process tree; a negative pid is understood by every supported kernel.  A
+# non-positive pid is a no-op: kill(0, sig) would signal the caller's own
+# process group, so an unspawned/unknown job can never take opcode down with it.
 FN os_kill_group
+    test rdi, rdi
+    jle .Lkg_none
     neg rdi
     SYS SYS_kill
+    ret
+.Lkg_none:
+    xor eax, eax
     ret

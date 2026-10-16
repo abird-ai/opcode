@@ -16,9 +16,11 @@
 # prompt_templates_init() -> 0
 # prompt_template_expand(name cstr, args cstr, out SB*) -> 0|-ENOENT
 #
-# Project resources under <cwd>/.opcode load only when config_trusted(cwd);
-# context files (AGENTS.override.md, AGENTS.md, OPCODE.md, CLAUDE.md) are not
-# trust-gated. Unknown/unreadable files are skipped silently. Single-threaded:
+# Project resources under <cwd>/.opcode and project context files (AGENTS.md,
+# OPCODE.md, CLAUDE.md, AGENTS.override.md from the cwd ancestors) load only
+# when config_trusted(cwd); the config-dir variants are not project-scoped and
+# are not trust-gated. Unknown/unreadable files are skipped silently.
+# Single-threaded:
 # scan tables and scratch paths are static and reused per call.
 #
 # resources_discover roots (host.s) are scanned in addition to the built-in
@@ -779,7 +781,7 @@ LFN pc_try_addendum
     call sb_push_cstr
     mov edi, ebx
     mov rsi, r12
-    xor edx, edx
+    mov edx, PC_SKILL_MAX          # bound the addendum read
     call pc_stream
     mov r15, rax
     mov edi, ebx
@@ -835,7 +837,7 @@ LFN pc_try_context
     call sb_push_cstr
     mov edi, ebx
     mov rsi, r12
-    xor edx, edx
+    mov edx, PC_SKILL_MAX          # bound the context-file read
     call pc_stream
     mov r15, rax
     mov edi, ebx
@@ -886,11 +888,18 @@ LFN pc_check_dir
 
 # pc_context_ancestors(sb, cwd cstr): project context files from every cwd
 # ancestor, root first, cwd last. A relative cwd counts as a single directory.
+# Project instructions are model input, so they load only when the cwd is
+# trusted -- the same gate as <cwd>/.opcode. The config-dir context files are
+# unrelated to trust and load unconditionally in prompt_build.
 LFN pc_context_ancestors
     PROLOGUE
     mov r12, rdi
     mov r13, rsi
     test r13, r13
+    jz .Lca_done
+    mov rdi, r13
+    call config_trusted
+    test eax, eax
     jz .Lca_done
     mov rdi, r13
     call strlen
@@ -1120,6 +1129,18 @@ LFN pc_scan_dir
 .Lsd_rec:
     cmp r14, r15
     jae .Lsd_loop
+    # Bound-check the record before touching d_type/d_name: a truncated or
+    # zero-length d_reclen (never produced by a healthy kernel, but cheap to
+    # guard) must not read past the buffer or loop forever.
+    lea rax, [r14 + 19]
+    cmp rax, r15
+    ja .Lsd_done
+    movzx eax, word ptr [rsp + r14 + 16]
+    cmp eax, 20
+    jb .Lsd_done
+    lea rcx, [r14 + rax]
+    cmp rcx, r15
+    ja .Lsd_done
     movzx edx, byte ptr [rsp + r14 + 18]
     lea rsi, [rsp + r14 + 19]
     cmp byte ptr [rsi], '.'
@@ -2249,10 +2270,12 @@ FN prompt_template_expand
     mov qword ptr [rsp + SB_cap], 0
     mov rdi, [r15 + 8]
     lea rsi, [rsp]
-    xor edx, edx
+    mov edx, PC_SKILL_MAX + 1   # bound the read: a huge file is not a template
     call pc_read_file_sb
     test rax, rax
     js .Lte_free_noent
+    cmp qword ptr [rsp + SB_len], PC_SKILL_MAX
+    ja .Lte_free_noent
     mov rdi, [rsp + SB_ptr]
     mov rsi, [rsp + SB_len]
     call pc_skip_fm
@@ -2372,7 +2395,7 @@ FN skill_body
     mov qword ptr [rsp + SB_cap], 0
     mov rdi, [r14 + 16]
     lea rsi, [rsp]
-    xor edx, edx
+    mov edx, PC_SKILL_MAX + 1   # bound the read: skill_body rejects over the cap
     call pc_read_file_sb
     test rax, rax
     js .Lsbd_drain

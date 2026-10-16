@@ -386,48 +386,10 @@
     mov rax, rbx
     EPILOGUE
 
-# .Lmkdirs(path): recursively mkdir each component; existing dirs are fine
+# .Lmkdirs(path): mkdir -p through the shared config_mkdirs (0700 session dirs)
 .Lmkdirs:
-    PROLOGUE
-    test rdi, rdi
-    jz .Lmd_ret
-    call .Ldup_cstr
-    test rax, rax
-    jz .Lmd_ret
-    mov rbx, rax
-    mov rdi, rbx
-    call strlen
-    mov r13, rax
-    xor r12d, r12d
-.Lmd_loop:
-    cmp r12, r13
-    jae .Lmd_final
-    cmp byte ptr [rbx + r12], '/'
-    jne .Lmd_next
-    test r12, r12
-    jz .Lmd_next
-    cmp r12, 1
-    jne .Lmd_do
-    cmp byte ptr [rbx], '/'
-    je .Lmd_next
-.Lmd_do:
-    mov byte ptr [rbx + r12], 0
-    mov rdi, rbx
-    mov esi, 0x1ED
-    call os_mkdir
-    mov byte ptr [rbx + r12], '/'
-.Lmd_next:
-    inc r12
-    jmp .Lmd_loop
-.Lmd_final:
-    mov rdi, rbx
-    mov esi, 0x1ED
-    call os_mkdir
-    mov rdi, rbx
-    call mem_free
-.Lmd_ret:
-    xor eax, eax
-    EPILOGUE
+    mov esi, 0700
+    jmp config_mkdirs
 
 # .Lwrite_line(s, sb, fsync): newline-terminate, write, optionally fsync
 .Lwrite_line:
@@ -739,6 +701,20 @@
     call strlen
     test rax, rax
     jz .Lwc_raw_empty
+    mov [rsp + 8], rax
+    # a tool-call input must be a JSON object; a malformed or truncated stream
+    # would otherwise corrupt the JSONL line and drop the whole message on load
+    mov rax, [rsp]
+    mov rdi, [rax + TC_args]
+    mov rsi, [rsp + 8]
+    call json_parse
+    test rax, rax
+    jz .Lwc_raw_empty
+    cmp dword ptr [rax + JV_type], JT_OBJ
+    jne .Lwc_raw_empty
+    mov rax, [rsp]
+    mov rdi, [rax + TC_args]
+    call strlen
     mov rdx, rax
     mov rax, [rsp]
     mov rsi, [rax + TC_args]
@@ -1532,11 +1508,14 @@ FN session_new
     call mem_free
     mov rdi, [rbx + S_path]
     mov esi, O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC
-    mov edx, 0x1A4
+    mov edx, 0600                  # transcripts are private to the user
     call os_open
     test rax, rax
     js .Lsn_fail
     mov [rbx + S_fd], rax
+    mov edi, eax
+    mov esi, 0600                  # force 0600 on a pre-existing file too
+    call os_fchmod
     lea rdi, [rsp + 16]
     mov qword ptr [rdi + SB_ptr], 0
     mov qword ptr [rdi + SB_len], 0
@@ -1643,7 +1622,7 @@ FN session_open
     cmp rax, -EINTR
     je .Lso_read
     test rax, rax
-    js .Lso_eof
+    js .Lso_ioerr
     jz .Lso_eof
     lea rcx, [rbx + rax]
     mov [rsp + 32], rcx
@@ -1736,6 +1715,20 @@ FN session_open
     mov [rbx + S_path], rax
     mov rax, rbx
     EPILOGUE
+.Lso_ioerr:
+    # a hard read error is not end-of-file: clean up and report "no session"
+    # rather than constructing one from a half-read file
+    mov edi, r13d
+    call os_close
+    mov rdi, rbx
+    call mem_free
+    lea rdi, [rsp]
+    call sb_free
+    mov rdi, [rsp + 48]
+    call mem_free
+    mov rdi, [rsp + 56]
+    call mem_free
+    jmp .Lso_zero
 .Lso_openfail:
     mov rdi, r14
     call mem_free
@@ -1814,6 +1807,8 @@ FN session_load
     mov rbx, rcx
     cmp qword ptr [rsp + 40], 0
     jne .Lsl_proc
+    cmp qword ptr [rsp + SB_len], 0
+    je .Lsl_proc                 # a blank line is not the header: keep looking
     mov qword ptr [rsp + 40], 1
     mov rdi, [rsp + SB_ptr]
     mov rsi, [rsp + SB_len]
@@ -2172,6 +2167,10 @@ FN session_find_latest
     jz .Lfl_next
     mov rcx, [rsp + 32]
     cmp byte ptr [rcx + rdx], '_'
+    jne .Lfl_next
+    # same shape as session_list: <ms>_<id8>.jsonl (digits + 15 == name length)
+    lea rsi, [rdx + 15]
+    cmp rsi, [rsp + 40]
     jne .Lfl_next
     cmp qword ptr [rsp + 8], 0
     jne .Lfl_cmp

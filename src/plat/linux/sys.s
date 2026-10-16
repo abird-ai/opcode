@@ -192,7 +192,9 @@ FN os_sleep_ns
     mov [rsp + 8], rdx
     mov rdi, rsp
     xor esi, esi
-    SYS SYS_nanosleep
+1:  SYS SYS_nanosleep
+    cmp rax, -EINTR
+    je 1b                       # a signal must not shorten the delay
     add rsp, 16
     ret
 

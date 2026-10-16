@@ -53,6 +53,7 @@ r_running:  .zero 4
 r_quit:     .zero 4
 r_eof:      .zero 4
 r_aborted:  .zero 4
+r_ended:    .zero 4            # agent_end already emitted for the final run
 
 .text
 
@@ -259,6 +260,7 @@ j_hook:
     call j_end
     EPILOGUE
 .Lh_done:
+    mov dword ptr [rip + r_aborted], 0   # the hook's done supersedes the synthetic one
     lea rsi, [rip + .V_done]
     call j_begin
     lea rdi, [rip + j_sb]
@@ -518,7 +520,15 @@ rpc_on_stdin:
     call rpc_process_lines
     EPILOGUE
 .Lro_eof:
-    mov dword ptr [rip + r_eof], 1
+    # a final command may arrive without a trailing newline; terminate and
+    # dispatch the tail so it is not silently dropped at EOF
+    cmp qword ptr [rip + r_lines + SB_len], 0
+    je 1f
+    lea rdi, [rip + r_lines]
+    mov esi, 10
+    call sb_push_byte
+    call rpc_process_lines
+1:  mov dword ptr [rip + r_eof], 1
 .Lro_ret:
     EPILOGUE
 
@@ -541,6 +551,7 @@ rpc_run_end:
     mov edi, eax
     call j_agent_end
     mov dword ptr [rip + r_running], 0
+    mov dword ptr [rip + r_ended], 1
     EPILOGUE
 
 # opcode_rpc_main(argc, argv) -> exit code
@@ -582,7 +593,14 @@ FN opcode_rpc_main
     jne .Lrm_done
     jmp .Lrm_loop
 .Lrm_done:
-    call mcp_shutdown
+    # a quit/EOF with no run still owes the client one agent_end
+    cmp dword ptr [rip + r_ended], 0
+    jne 1f
+    mov dword ptr [rip + r_ended], 1
+    call agent_exit_code
+    mov edi, eax
+    call j_agent_end
+1:  call mcp_shutdown
     xor eax, eax
     EPILOGUE
 .Lrm_fail:

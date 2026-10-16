@@ -370,8 +370,15 @@ FN net_dns
     inc rcx
     jmp .Lce_loop
 .Lce_end:
-    cmp byte ptr [rdi + rcx], 0
+    # accept a host written with a single trailing dot ("example.com.")
+    movzx eax, byte ptr [rdi + rcx]
+    test al, al
+    jz .Lce_yes
+    cmp al, '.'
     jne .Lce_no
+    cmp byte ptr [rdi + rcx + 1], 0
+    jne .Lce_no
+.Lce_yes:
     mov eax, 1
     ret
 .Lce_no:

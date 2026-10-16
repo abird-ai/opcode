@@ -21,6 +21,10 @@
 
 .equ MCP_MAX_SERVERS, 8
 .equ MCP_MAX_TOOLS,   32
+# Server-name budget inside "mcp__<server>__<tool>" (65-byte name): 64 - 5 - 2
+# minus at least 17 bytes for the tool so a long server name never starves the
+# tool suffix to empty (which would collide distinct tools).
+.equ MCP_SRVNAME_MAX, 40
 .equ MCP_TIMEOUT_MS,  10000
 .equ MCP_BUF_MAX,     1048576
 .equ MCP_READ_CHUNK,  8192
@@ -113,20 +117,7 @@ mcp_last_err: .quad 0
 
 .text
 
-# cstr_eq(a, b) -> 1 | 0 (leaf)
-cstr_eq:
-1:  mov al, [rdi]
-    cmp al, [rsi]
-    jne 2f
-    test al, al
-    jz 3f
-    inc rdi
-    inc rsi
-    jmp 1b
-2:  xor eax, eax
-    ret
-3:  mov eax, 1
-    ret
+# cstr_eq() is the shared base/str.s helper.
 
 # mcp_san(dst, src cstr, max) -> rax = dst + copied. Copies src lowercased,
 # mapping every byte outside [a-z0-9_] to '_'; stops at max bytes or NUL.
@@ -178,7 +169,7 @@ mcp_build_name:
     mov byte ptr [rbx + 4], '_'
     lea rdi, [rbx + 5]
     mov rsi, r11
-    mov edx, 57                          # leaves room for "__"
+    mov edx, MCP_SRVNAME_MAX             # leaves room for "__" and the tool
     call mcp_san
     mov word ptr [rax], 0x5f5f           # "__"
     add rax, 2
@@ -333,13 +324,8 @@ mcp_env_build:
     mov rbx, rax
     mov [rsp + 8], rax
     mov qword ptr [rsp], 1
-    mov rdi, rax
-    mov rsi, [rip + g_envp]
-    mov rdx, r12
-    shl rdx, 3
-    call memcpy
-    mov r15, r12                        # out index
-    mov qword ptr [rsp + 16], 0
+    xor r15d, r15d                      # server entries first: getenv takes the
+    mov qword ptr [rsp + 16], 0         # first match, so they override the parent
 3:  mov rcx, [rsp + 16]
     cmp rcx, r14
     jae 6f
@@ -387,7 +373,17 @@ mcp_env_build:
 .Leb_next:
     inc qword ptr [rsp + 16]
     jmp 3b
-6:  mov rax, [rsp + 8]
+6:  # append the parent environment, borrowed, after the owned server entries
+    xor ecx, ecx
+7:  cmp rcx, r12
+    jae 8f
+    mov rax, [rip + g_envp]
+    mov rax, [rax + rcx*8]
+    mov [rbx + r15*8], rax
+    inc r15
+    inc rcx
+    jmp 7b
+8:  mov rax, [rsp + 8]
     mov qword ptr [rax + r15*8], 0
     EPILOGUE
 .Leb_parent:
@@ -395,6 +391,8 @@ mcp_env_build:
     EPILOGUE
 
 # mcp_env_free(envp): release a table built by mcp_env_build (no-op for g_envp).
+# The owned server entries are the prefix [0, total - parent); the parent
+# entries borrowed from g_envp are the suffix.
 mcp_env_free:
     PROLOGUE 0
     test rdi, rdi
@@ -402,22 +400,28 @@ mcp_env_free:
     cmp rdi, [rip + g_envp]
     je .Lef_done
     mov rbx, rdi
-    mov rax, [rip + g_envp]
-    xor r12d, r12d
-1:  test rax, rax
-    jz 2f
-    cmp qword ptr [rax + r12*8], 0
+    xor r13d, r13d
+1:  cmp qword ptr [rbx + r13*8], 0
     je 2f
-    inc r12
-    jmp 1b
-2:  mov r13, r12
-3:  mov rdi, [rbx + r13*8]
-    test rdi, rdi
-    jz 4f
-    call mem_free
     inc r13
+    jmp 1b
+2:  mov rax, [rip + g_envp]
+    xor r12d, r12d
+3:  test rax, rax
+    jz 4f
+    cmp qword ptr [rax + r12*8], 0
+    je 4f
+    inc r12
     jmp 3b
-4:  mov rdi, rbx
+4:  sub r13, r12                        # owned prefix length
+    xor r12d, r12d
+5:  cmp r12, r13
+    jae 6f
+    mov rdi, [rbx + r12*8]
+    call mem_free
+    inc r12
+    jmp 5b
+6:  mov rdi, rbx
     call mem_free
 .Lef_done:
     xor eax, eax
@@ -727,7 +731,7 @@ mcp_spawn:
     call mem_free
     mov rax, [rsp + 56]
     test rax, rax
-    js .Lsp_ret
+    js .Lsp_spawnfail
     mov rcx, r12
     imul rcx, rcx, SP_SIZE
     lea rdx, [rip + mcp_servers]
@@ -758,6 +762,16 @@ mcp_spawn:
     mov edi, [rsp + 8]
     call os_close
     mov edi, [rsp + 12]
+    call os_close
+    mov rax, r14
+    EPILOGUE
+.Lsp_spawnfail:
+    # spawn failed after the pipes were created: close the two ends that would
+    # otherwise have become SP_in/SP_out (the others are closed above).
+    mov r14, rax
+    mov edi, [rsp + 4]
+    call os_close
+    mov edi, [rsp + 8]
     call os_close
     mov rax, r14
     EPILOGUE

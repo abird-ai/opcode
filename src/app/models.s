@@ -50,18 +50,7 @@
 
 .text
 
-# out_cstr(fd, cstr)
-out_cstr:
-    PROLOGUE
-    mov rbx, rdi
-    mov r12, rsi
-    mov rdi, rsi
-    call strlen
-    mov edi, ebx
-    mov rsi, r12
-    mov rdx, rax
-    call write_all
-    EPILOGUE
+# out_cstr() is the shared base/log.s helper.
 
 # eq(a, b) -> 1|0 (leaf)
 strq_eq:
@@ -696,7 +685,13 @@ models_match:
     jnz .Lmm_yes
     mov rdi, [rbx + MD_name]
     test rdi, rdi
-    jz .Lmm_no
+    jz .Lmm_prov
+    mov rsi, [rsp + 16]
+    call cstr_contains
+    test eax, eax
+    jnz .Lmm_yes
+.Lmm_prov:
+    mov rdi, [rbx + MD_provider]
     mov rsi, [rsp + 16]
     call cstr_contains
     test eax, eax

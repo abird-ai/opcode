@@ -392,6 +392,30 @@ mdx_row_at:
 
 # ------------------------------------------------------------------ inline
 
+# md_word(edi=byte) -> eax 1|0: ASCII word byte (alnum or '_'), used for the
+# CommonMark left/right-flanking tests on underscore emphasis.
+md_word:
+    cmp edi, '_'
+    je .Lmw_yes
+    cmp edi, '0'
+    jb .Lmw_no
+    cmp edi, '9'
+    jbe .Lmw_yes
+    cmp edi, 'A'
+    jb .Lmw_no
+    cmp edi, 'Z'
+    jbe .Lmw_yes
+    cmp edi, 'a'
+    jb .Lmw_no
+    cmp edi, 'z'
+    jbe .Lmw_yes
+.Lmw_no:
+    xor eax, eax
+    ret
+.Lmw_yes:
+    mov eax, 1
+    ret
+
 # parse_inline(rdi=s, rsi=n, rdx=segs, ecx=max) -> eax=count
 # Seg = { u64 ptr; u64 len; u64 tag } (24 bytes).  Keeps one slot for the
 # unstyled tail, so an over-long line never loses its remainder.
@@ -487,6 +511,17 @@ FN parse_inline
     cmp al, '_'
     jne .Lpi_lit
 .Lpi_ital_go:
+    # an underscore opens emphasis only when it is left-flanking, i.e. not
+    # intraword: foo_bar_baz is literal, _x_ and a _x_ are italic
+    cmp al, '_'
+    jne .Lpi_ital_open_ok
+    test r8, r8
+    jz .Lpi_ital_open_ok
+    movzx edi, byte ptr [rbx + r8 - 1]
+    call md_word
+    test eax, eax
+    jnz .Lpi_lit
+.Lpi_ital_open_ok:
     lea r9, [r8 + 1]
     cmp r9, r12
     jae .Lpi_lit
@@ -501,6 +536,18 @@ FN parse_inline
     inc rcx
     jmp .Lpi_ital_scan
 .Lpi_ital_maybe:
+    # an underscore closes only when right-flanking (not followed by a word
+    # byte), so foo_bar_baz never becomes emphasis
+    cmp r10b, '_'
+    jne .Lpi_ital_close_ok
+    lea rax, [rcx + 1]
+    cmp rax, r12
+    jae .Lpi_ital_close_ok
+    movzx edi, byte ptr [rbx + rcx + 1]
+    call md_word
+    test eax, eax
+    jnz .Lpi_ital_adv
+.Lpi_ital_close_ok:
     lea rax, [r8 + 1]
     cmp rcx, rax
     jbe .Lpi_ital_adv
@@ -534,6 +581,14 @@ FN parse_inline
     je .Lpi_lit_marker
     cmp al, '_'
     jne .Lpi_lit_next
+    # an intraword underscore is literal, so keep scanning the run
+    test r9, r9
+    jz .Lpi_lit_marker
+    movzx edi, byte ptr [rbx + r9 - 1]
+    call md_word
+    test eax, eax
+    jz .Lpi_lit_marker
+    jmp .Lpi_lit_next
 .Lpi_lit_marker:
     lea rax, [r9 + 1]
     cmp rax, r12

@@ -378,11 +378,16 @@ FN find_cb
     jmp .Lfc_match
 .Lfc_rel:
     mov rax, [rdx + FC_ROOTLEN]     # full prefix length (root plus separator)
+    cmp r13, rax
+    jbe .Lfc_whole                  # walk root is this file: subject is the whole path
     lea r15, [rbx + rax]
     mov rcx, r13
     sub rcx, rax
-    js .Lfc_none
     mov [rsp + 8], rcx
+    jmp .Lfc_match
+.Lfc_whole:
+    mov r15, rbx
+    mov [rsp + 8], r13
 .Lfc_match:
     mov rdi, [rdx + FC_PAT]
     mov rsi, r15

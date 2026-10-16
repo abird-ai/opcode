@@ -26,6 +26,7 @@
 .equ OPCODE_HOST_SIZE, 288
 
 # OpcodeToolV1 field offsets (C header)
+.equ FT_struct_size, 0
 .equ FT_flags,   4
 .equ FT_name,    8
 .equ FT_label,   16
@@ -77,6 +78,16 @@
 .p2align 3
 .Lcwd_buf: .zero 4096
 .Lkeybuf:  .zero 256
+# Last json string handed to json_path and its parsed root.  Re-parsing the
+# same payload for each host json_* call would reset the single-document arena
+# and invalidate pointers the plugin still holds; reusing the parse keeps the
+# ABI promise (valid until the next iteration) for a stable payload such as
+# the resources_discover event.  Reset whenever a different string is parsed.
+hj_src:   .zero 8
+hj_root:  .zero 8
+hj_gen:   .zero 8                # json_generation at the time hj_root was parsed
+hj_copy:  .zero 8                # byte copy of the cached payload
+hj_len:   .zero 8
 
 # resources_discover state: one JSON payload scratch + a count and bounded
 # path table per kind.  A root path is a NUL-terminated absolute directory.
@@ -104,7 +115,7 @@ opcode_host_command_count: .zero 8
 # segment looked up in the current object.  Single-threaded host: one scratch
 # key buffer is enough.
 json_path:
-    PROLOGUE
+    PROLOGUE 16
     mov rbx, rdi
     mov r12, rsi
     test rbx, rbx
@@ -113,13 +124,50 @@ json_path:
     jz .Ljp_null
     cmp byte ptr [r12], 0
     je .Ljp_null
+    # Reuse the last parse only when the payload is byte-identical and the
+    # arena has not been reset.  Keying on content (not the buffer address)
+    # avoids returning a stale document when a plugin rebuilds different JSON
+    # in the same buffer between host calls.
+    mov rax, [rip + hj_root]
+    test rax, rax
+    jz .Ljp_parse
+    mov rcx, [rip + json_generation]
+    cmp rcx, [rip + hj_gen]
+    jne .Ljp_parse
     mov rdi, rbx
     call strlen
+    cmp rax, [rip + hj_len]
+    jne .Ljp_parse
+    mov rdi, [rip + hj_copy]
+    mov rsi, rbx
+    mov rdx, rax
+    call memeq
+    test eax, eax
+    jz .Ljp_parse
+    mov rax, [rip + hj_root]
+    jmp .Ljp_parsed
+.Ljp_parse:
+    mov rdi, rbx
+    call strlen
+    mov [rsp], rax
     mov rdi, rbx
     mov rsi, rax
     call json_parse
+    mov [rip + hj_root], rax
+    mov rcx, [rip + json_generation]
+    mov [rip + hj_gen], rcx
+    mov rdi, [rip + hj_copy]
+    call mem_free
+    mov rdi, rbx
+    mov rsi, [rsp]
+    call mem_dup
+    mov [rip + hj_copy], rax
+    mov rax, [rsp]
+    mov [rip + hj_len], rax
+    mov rax, [rip + hj_root]
     test rax, rax
     jz .Ljp_null
+.Ljp_parsed:
     mov r13, rax
 .Ljp_loop:
     lea rdi, [rip + .Lkeybuf]
@@ -287,28 +335,36 @@ host_register_tool:
     mov edi, TL_SIZE + FT_SIZE
     call mem_alloc
     mov rbx, rax
-    mov rax, [r12 + FT_name]
+    # Copy only the fields the plugin actually declares (append-only ABI): an
+    # older, shorter OpcodeToolV1 must not be read past its struct_size.  The
+    # wrapper tail is zeroed by mem_alloc, so missing fields read as 0 below.
+    mov r13d, [r12 + FT_struct_size]
+    cmp r13d, FT_SIZE
+    jbe 1f
+    mov r13d, FT_SIZE
+1:  lea rdi, [rbx + TL_SIZE]
+    mov rsi, r12
+    mov edx, r13d
+    call memcpy
+    lea r13, [rbx + TL_SIZE]
+    mov rax, [r13 + FT_name]
     mov [rbx + TL_name], rax
-    mov rax, [r12 + FT_label]
+    mov rax, [r13 + FT_label]
     mov [rbx + TL_label], rax
-    mov rax, [r12 + FT_desc]
+    mov rax, [r13 + FT_desc]
     mov [rbx + TL_desc], rax
-    mov rax, [r12 + FT_params]
+    mov rax, [r13 + FT_params]
     mov [rbx + TL_params], rax
-    mov rax, [r12 + FT_snippet]
+    mov rax, [r13 + FT_snippet]
     mov [rbx + TL_snippet], rax
-    mov rax, [r12 + FT_guidelines]
+    mov rax, [r13 + FT_guidelines]
     mov [rbx + TL_guidelines], rax
-    mov eax, [r12 + FT_flags]
+    mov eax, [r13 + FT_flags]
     and eax, TL_READONLY | TL_SEQUENTIAL | TL_DESTRUCTIVE
     or eax, TL_PROMPT
     mov [rbx + TL_flags], eax
     lea rax, [rip + host_ptool_exec]
     mov [rbx + TL_exec], rax
-    lea rdi, [rbx + TL_SIZE]
-    mov rsi, r12
-    mov edx, FT_SIZE
-    call memcpy
     mov rdi, rbx
     call tools_add
 .Lhrt_ret:
@@ -582,7 +638,7 @@ FN resources_root_count
     test eax, eax
     js .Lrrc_zero
     lea rcx, [rip + rr_counts]
-    mov rax, [rax + rcx]
+    mov rax, [rcx + rax*8]
     EPILOGUE
 .Lrrc_zero:
     xor eax, eax

@@ -177,8 +177,10 @@ FN hc_tls_start
     jnz 1f
     push rdi
     push rsi
+    sub rsp, 8                     # keep rsp 16-byte aligned for the call
     mov edi, CLOCK_MONOTONIC
     call os_now_ns
+    add rsp, 8
     pop rsi
     pop rdi
     mov rdx, rax
@@ -384,6 +386,8 @@ FN hc_send_all
     jg .Lsa_sent
     cmp rax, -EAGAIN
     je .Lsa_wait
+    cmp rax, -EINTR
+    je .Lsa_loop                   # signal interrupted the send: retry
     test rax, rax
     jnz .Lsa_ret
     mov rax, -EIO                   # a zero write is a closed peer
@@ -438,6 +442,8 @@ FN hc_recv_loop
     jz .Lrl_eof
     cmp rax, -EAGAIN
     je .Lrl_wait
+    cmp rax, -EINTR
+    je .Lrl_loop                   # signal interrupted the read: retry
     EPILOGUE
 .Lrl_data:
     mov [rsp + 8], rax
@@ -528,6 +534,8 @@ FN hc_wait_io
     mov esi, 1
     mov rdx, rax
     call os_poll
+    cmp rax, -EINTR
+    je 1b                          # a signal does not fail the wait
     test rax, rax
     js 2f
     jz 1b

@@ -18,6 +18,7 @@
 .Ltimeout_key: .asciz "timeout"
 .Lsh:      .asciz "/bin/sh"
 .Llc:      .asciz "-lc"
+.Ldevnull: .asciz "/dev/null"
 .Lerr_spawn: .asciz "error: cannot start command"
 .Lbadargs: .asciz "error: invalid arguments"
 .Lexit:    .asciz "[exit "
@@ -84,11 +85,19 @@ FN bash_exec
     call os_pipe
     test rax, rax
     js .Lbe_pipeerr
+    # stdin = /dev/null: a command that reads stdin must not consume the TUI's
+    # keystrokes or block until the watchdog fires.  A failed open stays
+    # negative, which os_spawn reads as "inherit".
+    lea rdi, [rip + .Ldevnull]
+    xor esi, esi                    # O_RDONLY
+    xor edx, edx
+    call os_open
+    mov [rsp + 40], rax
     # spawn with stdout = stderr = fds[1]
     lea rdi, [rsp]
     mov rsi, [rip + g_envp]
     xor edx, edx                    # cwd = inherit
-    mov ecx, -1                     # stdin = inherit
+    mov ecx, [rsp + 40]             # stdin = /dev/null
     mov r8d, [rsp + 36]
     mov r9d, r8d
     sub rsp, 16
@@ -98,7 +107,11 @@ FN bash_exec
     mov r15, rax                    # pid | -errno
     mov edi, [rsp + 36]             # parent closes the write end
     call os_close
-    test r15, r15
+    mov edi, [rsp + 40]
+    test edi, edi
+    js 1f
+    call os_close                   # parent closes its /dev/null copy
+1:  test r15, r15
     js .Lbe_spawnerr
     mov [rbx + J_pid], r15
     mov eax, [rsp + 32]

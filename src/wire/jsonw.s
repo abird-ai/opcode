@@ -26,6 +26,7 @@
 .Ljw_e_n:     .byte 0x5c, 'n'
 .Ljw_e_r:     .byte 0x5c, 'r'
 .Ljw_e_t:     .byte 0x5c, 't'
+.Ljw_e_fffd:  .byte 0xef, 0xbf, 0xbd  # U+FFFD replacement character
 .Ljw_hex:     .ascii "0123456789abcdef"
 .Ljw_true:    .ascii "true"
 .Ljw_false:   .ascii "false"
@@ -74,8 +75,26 @@
     je .Ljw_esc_flush
     cmp ecx, 0x5c
     je .Ljw_esc_flush
+    cmp ecx, 0x80
+    jae .Ljw_esc_utf8
     inc rax
     jmp .Ljw_esc_run
+.Ljw_esc_utf8:
+    # a non-ASCII byte: keep the sequence in the run only when it is valid
+    # UTF-8; otherwise flush the valid run that precedes it and let the special
+    # handler emit U+FFFD, so a valid sequence before an invalid byte survives.
+    mov r15, rax
+    lea rdi, [r12 + rax]
+    mov rsi, r13
+    sub rsi, rax
+    call jw_utf8_valid
+    test rax, rax
+    jz .Ljw_esc_bad
+    add rax, r15
+    jmp .Ljw_esc_run
+.Ljw_esc_bad:
+    mov rax, r15                  # restore the run length to flush
+    jmp .Ljw_esc_flush
 .Ljw_esc_flush:
     test rax, rax
     jz .Ljw_esc_special
@@ -106,6 +125,8 @@
     je .Ljw_esc_do_r
     cmp al, 9
     je .Ljw_esc_do_t
+    cmp al, 0x80
+    jae .Ljw_esc_do_fffd         # invalid UTF-8 byte: emit U+FFFD
     # \u00xx for every other control byte
     mov ecx, eax
     shr ecx, 4
@@ -149,8 +170,97 @@
     mov edx, 2
     call sb_push
     jmp .Ljw_esc_scan
+.Ljw_esc_do_fffd:
+    lea rsi, [rip + .Ljw_e_fffd]
+    mov rdi, rbx
+    mov edx, 3
+    call sb_push
+    jmp .Ljw_esc_scan
 .Ljw_esc_done:
     EPILOGUE
+
+# jw_utf8_valid(ptr rdi, avail rsi) -> rax: sequence length 2..4, or 0 when the
+# bytes at ptr are not a well-formed (non-overlong, non-surrogate) UTF-8
+# sequence of at most avail bytes.
+jw_utf8_valid:
+    test rsi, rsi
+    jz .Ljv_bad
+    movzx ecx, byte ptr [rdi]
+    cmp ecx, 0xC2
+    jb .Ljv_bad
+    cmp ecx, 0xDF
+    jbe .Ljv_two
+    cmp ecx, 0xEF
+    jbe .Ljv_three
+    cmp ecx, 0xF4
+    jbe .Ljv_four
+    jmp .Ljv_bad
+.Ljv_two:
+    cmp rsi, 2
+    jb .Ljv_bad
+    movzx edx, byte ptr [rdi + 1]
+    cmp edx, 0x80
+    jb .Ljv_bad
+    cmp edx, 0xBF
+    ja .Ljv_bad
+    mov eax, 2
+    ret
+.Ljv_three:
+    cmp rsi, 3
+    jb .Ljv_bad
+    movzx edx, byte ptr [rdi + 1]
+    cmp ecx, 0xE0
+    jne 1f
+    cmp edx, 0xA0
+    jb .Ljv_bad
+    jmp 2f
+1:  cmp ecx, 0xED
+    jne 2f
+    cmp edx, 0x9F
+    ja .Ljv_bad
+2:  cmp edx, 0x80
+    jb .Ljv_bad
+    cmp edx, 0xBF
+    ja .Ljv_bad
+    movzx edx, byte ptr [rdi + 2]
+    cmp edx, 0x80
+    jb .Ljv_bad
+    cmp edx, 0xBF
+    ja .Ljv_bad
+    mov eax, 3
+    ret
+.Ljv_four:
+    cmp rsi, 4
+    jb .Ljv_bad
+    movzx edx, byte ptr [rdi + 1]
+    cmp ecx, 0xF0
+    jne 3f
+    cmp edx, 0x90
+    jb .Ljv_bad
+    jmp 4f
+3:  cmp ecx, 0xF4
+    jne 4f
+    cmp edx, 0x8F
+    ja .Ljv_bad
+4:  cmp edx, 0x80
+    jb .Ljv_bad
+    cmp edx, 0xBF
+    ja .Ljv_bad
+    movzx edx, byte ptr [rdi + 2]
+    cmp edx, 0x80
+    jb .Ljv_bad
+    cmp edx, 0xBF
+    ja .Ljv_bad
+    movzx edx, byte ptr [rdi + 3]
+    cmp edx, 0x80
+    jb .Ljv_bad
+    cmp edx, 0xBF
+    ja .Ljv_bad
+    mov eax, 4
+    ret
+.Ljv_bad:
+    xor eax, eax
+    ret
 
 # jsonw_obj(sb) / jsonw_obj_end(sb)
 FN jsonw_obj

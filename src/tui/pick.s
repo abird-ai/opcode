@@ -235,9 +235,6 @@ FN opcode_pick
 
     lea rdi, [rip + pick_in]
     call input_init
-
-    lea rdi, [rip + pick_in]
-    call input_init
     mov dword ptr [rip + pick_dirty], 1
 
 .Lpk_loop:
@@ -398,6 +395,7 @@ FN opcode_pick_tty
     EPILOGUE
 
 .Lpt_fail:
+    call term_restore             # undo any partial enter before dropping the tty
     mov rdi, [rbp - 88]
     mov qword ptr [rip + g_pick_fd], 0
     mov qword ptr [rip + g_pick_out_fd], 1

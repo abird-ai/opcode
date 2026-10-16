@@ -8,6 +8,7 @@
 # Contract: src/core/API.md.
 
 .equ ED_MAX_DIFF, 400
+.equ ED_SLURP_MAX, (8 * 1024 * 1024)   # refuse to load huge files into memory
 
 # edit_write_atomic returns -ELOOP when the named object is a symlink.
 .equ ELOOP, 40
@@ -111,7 +112,13 @@ ed_slurp:
     test rax, rax
     js .Les_readerr
     jz .Les_done
-    mov rdi, r12
+    mov rcx, [r12 + SB_len]
+    add rcx, rax
+    cmp rcx, ED_SLURP_MAX
+    jbe 1f
+    mov rax, -EFBIG               # bounded slurp: a multi-GB file is rejected
+    jmp .Les_readerr
+1:  mov rdi, r12
     mov rsi, r13
     mov rdx, rax
     call sb_push

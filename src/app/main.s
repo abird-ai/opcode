@@ -44,18 +44,7 @@
     .asciz ""
 .text
 
-# out_cstr(fd, cstr) -> 0|-errno
-FN out_cstr
-    PROLOGUE
-    mov rbx, rdi
-    mov r12, rsi
-    mov rdi, rsi
-    call strlen
-    mov edi, ebx
-    mov rsi, r12
-    mov rdx, rax
-    call write_all
-    EPILOGUE
+# out_cstr() is the shared base/log.s helper.
 
 # sig_setup(): install the fatal-signal cleanup for the non-TUI modes.
 # Points the platform exit hook at the agent's reaper and arms
@@ -67,20 +56,7 @@ sig_setup:
     mov [rip + g_exit_hook], rax
     jmp os_sig_cleanup
 
-# cstr_eq(a, b) -> 1|0 (leaf)
-cstr_eq:
-1:  mov al, [rdi]
-    cmp al, [rsi]
-    jne 2f
-    test al, al
-    jz 3f
-    inc rdi
-    inc rsi
-    jmp 1b
-2:  xor eax, eax
-    ret
-3:  mov eax, 1
-    ret
+# cstr_eq() is the shared base/str.s helper.
 
 # opcode_main() -> exit code
 FN opcode_main

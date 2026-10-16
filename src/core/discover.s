@@ -490,7 +490,7 @@ disc_write:
     mov rbx, rax
     mov rdi, rbx
     mov esi, 0700
-    call os_mkdir                  # best effort
+    call config_mkdirs             # best effort; creates <xdg>/abird/opcode
     mov rdi, rbx
     lea rsi, [rip + .Lumodels]
     call config_path_join
@@ -555,7 +555,7 @@ disc_write:
 # d_provider.  Preserves r12-r15 (PROLOGUE).
 .Ldp_in_builtins:
     PROLOGUE 16
-    call catalog_count
+    call catalog_builtin_count
     mov r12, rax
     xor r13d, r13d
 1:  cmp r13, r12
@@ -705,7 +705,7 @@ disc_parse:
     call jsonw_key
     lea rdi, [rip + d_out]
     call jsonw_arr
-    call catalog_count
+    call catalog_builtin_count
     mov r12, rax
     xor r13d, r13d
 .Ldp_bloop:
@@ -834,6 +834,7 @@ disc_parse:
     call disc_write
     test rax, rax
     js .Ldp_ret
+    call catalog_reset_user         # models.jsonc changed: re-read on next load
     mov rax, r15
     EPILOGUE
 .Ldp_bad:
@@ -1442,6 +1443,38 @@ FN disc_eff_base
     xor edx, edx
     EPILOGUE
 
+# disc_catalog_present() -> 1|0: <config dir>/models.jsonc exists.  A fresh
+# cache entry is only useful when the catalog file it describes is still on
+# disk; if a user removes it, a cache hit must not suppress the probe.
+FN disc_catalog_present
+    PROLOGUE 0
+    call config_user_dir
+    test rax, rax
+    jz .Ldcat_no
+    mov rbx, rax
+    lea rsi, [rip + .Lumodels]
+    mov rdi, rbx
+    call config_path_join
+    test rax, rax
+    jz .Ldcat_no
+    mov r12, rax
+    mov rdi, rax
+    xor esi, esi
+    xor edx, edx
+    call os_open
+    mov r13, rax
+    mov rdi, r12
+    call mem_free
+    test r13, r13
+    js .Ldcat_no
+    mov rdi, r13
+    call os_close
+    mov eax, 1
+    EPILOGUE
+.Ldcat_no:
+    xor eax, eax
+    EPILOGUE
+
 # discover_models_cached(provider rdi, verbose esi, force edx) -> count | -errno
 # Reuses a fresh (< 24 h) cache unless forced; --offline never probes and a
 # probe failure falls back to the cached count, so the caller is never forced
@@ -1473,7 +1506,11 @@ FN discover_models_cached
     div rcx
     sub rax, [rsp + 40]
     cmp rax, DISC_TTL_MS
-    jb .Ldmc_cached
+    jae .Ldmc_offline          # stale: probe (or fall back to cache offline)
+    call disc_catalog_present
+    test eax, eax
+    jnz .Ldmc_cached           # fresh and the catalog file is still there
+    jmp .Ldmc_offline          # cache describes a file that is gone
 .Ldmc_offline:
     cmp qword ptr [rip + g_offline], 0
     jne .Ldmc_cached

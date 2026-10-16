@@ -907,6 +907,11 @@ FN input_free
     mov rdi, [rbx + IN_paste_prev]
     call mem_free
     mov qword ptr [rbx + IN_paste_prev], 0
+    # The ring entries just freed must not be seen again: clear the count and
+    # head so a later input_free (e.g. input_init on the next picker open)
+    # cannot double-free the same payloads.
+    mov dword ptr [rbx + IN_count], 0
+    mov dword ptr [rbx + IN_head], 0
     xor eax, eax
     EPILOGUE
 

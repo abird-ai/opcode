@@ -5,7 +5,8 @@
 # The Url layout is single-sourced in src/wire/url.inc. url_parse never copies
 # or modifies the input: every pointer references either the input string or
 # the static "/" path. Missing path -> "/" len 1. Scheme, host, path and query
-# reject C0 controls and DEL (< 0x20 or 0x7f).
+# reject C0 controls, space and DEL (< 0x20, 0x20 or 0x7f) from every URL
+# component, so no unencoded byte can break the request line or Host header.
 
 .section .rodata
 .Lslash: .asciz "/"
@@ -100,7 +101,7 @@ FN url_parse
     jae .Lup_host_end
     movzx eax, byte ptr [r15]
     cmp eax, 0x20
-    jb .Lup_bad
+    jbe .Lup_bad
     cmp eax, 0x7f
     je .Lup_bad
     cmp eax, ':'
@@ -126,7 +127,7 @@ FN url_parse
     jae .Lup_bad                 # unterminated '['
     movzx eax, byte ptr [r15]
     cmp eax, 0x20
-    jb .Lup_bad
+    jbe .Lup_bad
     cmp eax, 0x7f
     je .Lup_bad
     cmp eax, ']'
@@ -192,7 +193,7 @@ FN url_parse
     test eax, eax
     jz .Lup_path_end
     cmp eax, 0x20
-    jb .Lup_bad
+    jbe .Lup_bad
     cmp eax, 0x7f
     je .Lup_bad
     cmp eax, '?'
@@ -221,7 +222,7 @@ FN url_parse
     test eax, eax
     jz .Lup_qend
     cmp eax, 0x20
-    jb .Lup_bad
+    jbe .Lup_bad
     cmp eax, 0x7f
     je .Lup_bad
     cmp eax, '#'

@@ -37,6 +37,7 @@
 .Lnl:            .asciz "\n"
 .Lprovider_title: .asciz "Choose a provider"
 .Lmodel_title:    .asciz "Choose a model"
+.Lmodel_trunc:    .asciz "note: showing the first 32 models\n"
 .Lpn_ollama:      .asciz "Ollama local"
 .Lpn_cloud:       .asciz "Ollama Cloud"
 .Lpn_anthropic:   .asciz "Anthropic"
@@ -68,6 +69,7 @@
     .ascii "  Skip:           pass --provider/--model, or set a key and re-run\n"
     .asciz ""
 .Lconfigured:    .asciz "opcode: configured "
+.Lcfg_note:      .asciz "opcode: warning: could not save config\n"
 .Lauth_hint:     .asciz "opcode: authenticate with: opcode login "
 .Lauth_hint_key: .asciz "opcode: set GEMINI_API_KEY or pass --api-key\n"
 .Lno_models:     .asciz "opcode: no models available for "
@@ -279,8 +281,14 @@ onboard_resolve:
     call config_str
     test rax, rax
     jz .Lor_cfg_model
+    cmp byte ptr [rax], 0
+    je .Lor_dm_empty             # an empty default_model is unset
     mov [rip + g_agent_model], rax
     jmp .Lor_yes
+.Lor_dm_empty:
+    mov rdi, rax
+    call mem_free
+    jmp .Lor_cfg_model
 .Lor_cfg_model:
     mov rdi, [rip + g_agent_provider]
     call onboard_pick_model
@@ -454,6 +462,7 @@ onboard_notty:
 # cloud providers.  Esc cancels onboarding; no models keeps the old message.
 onboard_apply:
     PROLOGUE 176
+.equ ONBOARD_MAX_ROWS, 32          # matches the picker's fixed row capacity
     mov rbx, rdi                    # provider
     mov r12d, esi                   # need_auth
     mov qword ptr [rsp], 0          # saved discover base
@@ -515,7 +524,13 @@ onboard_apply:
 .Loa_counted:
     test r14, r14
     jz .Loa_nomodel
-    mov [rsp + 32], r14
+    # the picker holds at most ONBOARD_MAX_ROWS rows; cap and note the overflow
+    mov qword ptr [rsp + 120], 0
+    cmp r14, ONBOARD_MAX_ROWS
+    jbe 1f
+    mov r14, ONBOARD_MAX_ROWS
+    mov qword ptr [rsp + 120], 1
+1:  mov [rsp + 32], r14
     mov rdi, r14
     shl rdi, 3
     call mem_alloc
@@ -536,6 +551,8 @@ onboard_apply:
     xor r14d, r14d
 .Loa_fill:
     cmp r13, [rsp + 48]
+    jae .Loa_filled
+    cmp r14, ONBOARD_MAX_ROWS
     jae .Loa_filled
     mov rdi, r13
     call catalog_at
@@ -609,7 +626,12 @@ onboard_apply:
     cmp qword ptr [rsp + 40], 32
     jb 6f
     mov qword ptr [rsp + 40], 0
-6:  lea rdi, [rip + .Lmodel_title]
+6:  cmp qword ptr [rsp + 120], 0
+    je 7f
+    mov edi, 2
+    lea rsi, [rip + .Lmodel_trunc]
+    call onboard_out
+7:  lea rdi, [rip + .Lmodel_title]
     mov rsi, [rsp + 8]
     mov rdx, [rsp + 16]
     mov rcx, r14
@@ -651,6 +673,8 @@ onboard_apply:
     mov rsi, [r15 + MD_id]
     xor edx, edx
     call config_save
+    test rax, rax
+    js .Loa_cfg_note
     mov edi, 1
     lea rsi, [rip + .Lconfigured]
     call onboard_out
@@ -666,6 +690,12 @@ onboard_apply:
     mov edi, 1
     lea rsi, [rip + .Lnl]
     call onboard_out
+    jmp .Loa_hint
+.Loa_cfg_note:
+    mov edi, 2
+    lea rsi, [rip + .Lcfg_note]
+    call onboard_out
+.Loa_hint:
     cmp r12d, 2
     je .Loa_hint_key
     test r12d, r12d

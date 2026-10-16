@@ -308,9 +308,11 @@ t_md_live:        .zero MD_SIZE
 t_md_live_base:   .zero 8
 t_md_live_on:     .zero 4
 # Modal picker row storage: the pointer arrays handed to menu_rows plus a bump
-# arena for the model-picker descriptions built each open.
-t_pickname:       .zero 8 * 32
-t_pickdesc:       .zero 8 * 32
+# arena for the model-picker descriptions built each open. T_PICK_ROWS bounds
+# every producer so a provider with a large catalog cannot overrun the arrays.
+.equ T_PICK_ROWS, 32
+t_pickname:       .zero 8 * T_PICK_ROWS
+t_pickdesc:       .zero 8 * T_PICK_ROWS
 t_picktext:       .zero 8192
 t_pickbump:       .zero 8
 # Owned session list for the in-TUI resume picker (session_recent VEC).
@@ -545,29 +547,11 @@ FN tui_placeholder
     xor eax, eax
     EPILOGUE
 
-# tui_mkdir_p(path): best-effort create every parent component of path.
+# tui_mkdir_p(path): best-effort create every component through the shared
+# config_mkdirs (0755).
 FN tui_mkdir_p
-    PROLOGUE 0
-    mov r12, rdi
-    mov r13, 1
-.Lmp_loop:
-    movzx eax, byte ptr [r12 + r13]
-    test al, al
-    jz .Lmp_done
-    cmp al, '/'
-    je .Lmp_slash
-    inc r13
-    jmp .Lmp_loop
-.Lmp_slash:
-    mov byte ptr [r12 + r13], 0
-    mov rdi, r12
     mov esi, 0755
-    call os_mkdir
-    mov byte ptr [r12 + r13], '/'
-    inc r13
-    jmp .Lmp_loop
-.Lmp_done:
-    EPILOGUE
+    jmp config_mkdirs
 
 # tui_history_setup(): resolve $XDG_STATE_HOME/abird/opcode/history else
 # $HOME/.local/state/abird/opcode/history, create its parent directories and record it.
@@ -3202,6 +3186,8 @@ tui_handle_event:
     je .Le_modal_enter
     cmp r12d, K_ESC
     je .Le_modal_esc
+    cmp r12d, 0x03              # Ctrl+C cancels the picker
+    je .Le_modal_esc
     mov dword ptr [rip + t_dirty], 1
     EPILOGUE
 .Le_modal_esc:
@@ -4195,7 +4181,20 @@ tui_pick_putdesc:
     test rdi, rdi
     jnz 1f
     lea rdi, [rip + t_picktext]
-1:  mov rsi, r12
+1:  # clamp to the arena so a long/odd description can never write past it.  At
+    # the boundary, retreat to the last byte so the NUL still lands in-bounds.
+    lea rax, [rip + t_picktext + 8192]
+    sub rax, rdi
+    jbe .Lpd_full
+    dec rax                     # bytes left for content (one reserved for NUL)
+    cmp r13, rax
+    jbe 2f
+    mov r13, rax
+    jmp 2f
+.Lpd_full:
+    lea rdi, [rip + t_picktext + 8191]
+    xor r13d, r13d
+2:  mov rsi, r12
     mov rdx, r13
     call memcpy
     mov byte ptr [rax + r13], 0
@@ -4214,7 +4213,18 @@ tui_pick_putcstr:
     test rdi, rdi
     jnz 1f
     lea rdi, [rip + t_picktext]
-1:  mov rsi, r12
+1:  lea rax, [rip + t_picktext + 8192]
+    sub rax, rdi
+    jbe .Lpc_full
+    dec rax                     # bytes left for content (one reserved for NUL)
+    cmp r13, rax
+    jbe 2f
+    mov r13, rax
+    jmp 2f
+.Lpc_full:
+    lea rdi, [rip + t_picktext + 8191]
+    xor r13d, r13d
+2:  mov rsi, r12
     mov rdx, r13
     call memcpy
     mov byte ptr [rax + r13], 0
@@ -4497,6 +4507,8 @@ FN tui_picker_open_model
     call tui_streq
     test eax, eax
     jz .Lpm_next
+    cmp r13d, T_PICK_ROWS
+    jae .Lpm_next               # fixed row arrays: stop at capacity
     lea rax, [rip + t_pickname]
     mov rdx, [rbx + MD_id]
     mov [rax + r13*8], rdx
@@ -4720,9 +4732,9 @@ tui_cmd_thinking:
 # A successful apply invalidates the fullscreen frame so every resolved colour
 # is repainted; inline leaves its already-committed scrollback untouched.
 tui_cmd_theme:
-    PROLOGUE 96
+    PROLOGUE 160
     mov r12, rdi
-    lea rdi, [rbp - 64]
+    lea rdi, [rbp - 128]
     xor ecx, ecx
 1:  mov al, [r12 + rcx]
     test al, al
@@ -4733,7 +4745,7 @@ tui_cmd_theme:
     je 2f
     cmp al, 10
     je 2f
-    cmp ecx, 63
+    cmp ecx, 64                    # allow the documented {1,64}
     jae 2f
     mov [rdi + rcx], al
     inc ecx
@@ -4750,7 +4762,7 @@ tui_cmd_theme:
     lea rsi, [rip + .Ltgl_dark]
     jmp .Lct_apply
 .Lct_named:
-    lea rsi, [rbp - 64]
+    lea rsi, [rbp - 128]
 .Lct_apply:
     mov r13, rsi
     lea rdi, [rip + t_theme]

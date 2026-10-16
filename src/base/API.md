@@ -16,6 +16,7 @@ memeq(a, b, n) -> 1 | 0
 strlen(s) -> n
 str_eq(a, alen, b, blen) -> 1 | 0
 str_eq_cstr(a, alen, cstr) -> 1 | 0            (exported: other seats may drop local cstr_eq copies)
+cstr_eq(a cstr, b cstr) -> 1 | 0                (the single cstr comparator)
 str_starts(a, alen, prefix, plen) -> 1 | 0
 str_find(hay, hlen, needle, nlen) -> index | -1        (empty needle -> 0)
 parse_u64(ptr, len) -> rax value, rdx digits consumed  (rdx=0 if none)
@@ -48,6 +49,7 @@ only genuine marks; callers store a control as a space and drop the rest.
 ```text
 LOG_ERROR 0, LOG_INFO 1, LOG_DEBUG 2        # level scale
 write_all(fd, ptr, len) -> 0 | -errno   (retries EINTR/EAGAIN)
+out_cstr(fd, cstr) -> 0 | -errno         (write a NUL-terminated string)
 log_write(ptr, len) -> 0 | -errno       (fd 2)
 log_cstr(cstr)
 log_u64(value)

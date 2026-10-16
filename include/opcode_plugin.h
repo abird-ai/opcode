@@ -187,7 +187,7 @@ typedef struct OpcodePluginV1 {
     const char *name;
     const char *version;
     int (*init)(const OpcodeHostV1 *host) OPCODE_SYSV; /* register tools/commands/events */
-    void (*shutdown)(void) OPCODE_SYSV;                /* idempotent; may be NULL */
+    void (*shutdown)(void) OPCODE_SYSV;                /* reserved: not called yet */
     void *reserved[4];
 } OpcodePluginV1;
 

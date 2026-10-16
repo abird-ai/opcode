@@ -66,7 +66,7 @@ FN term_init
     test rax, rax
     js .Ltinit_out
     or dword ptr [rip + term_flags], TERM_F_RAW
-    mov edi, 1
+    mov edi, [rip + g_pick_out_fd]
     lea rsi, [rip + .Ltinit_enter]
     mov edx, 26
     call write_all
@@ -99,7 +99,7 @@ FN term_init
     test rax, rax
     js .Ltinit_out
     or dword ptr [rip + term_flags], TERM_F_RAW
-    mov edi, 1
+    mov edi, [rip + g_pick_out_fd]
     lea rsi, [rip + .Ltpaste_on]
     mov edx, 8
     call write_all
@@ -172,7 +172,7 @@ FN term_set_bg
     mov rdx, rdi
     lea rsi, [rsp]
     sub rdx, rsi
-    mov edi, 1
+    mov edi, [rip + g_pick_out_fd]
     call write_all
     mov dword ptr [rip + term_bg_set], 1
 .Ltsb_done:
@@ -186,7 +186,7 @@ FN term_reset_bg
     jne .Ltrb_done
     cmp dword ptr [rip + term_bg_set], 0
     je .Ltrb_done
-    mov edi, 1
+    mov edi, [rip + g_pick_out_fd]
     lea rsi, [rip + .Lt_osc111]
     mov edx, 7
     call write_all
@@ -206,36 +206,36 @@ FN term_restore
     # always restore autowrap first: a bracketed inline/fullscreen frame leaves
     # it off only for the duration of one write, but a fatal signal can land
     # inside that write.
-    mov edi, 1
+    mov edi, [rip + g_pick_out_fd]
     lea rsi, [rip + .Lawrap_on]
     mov edx, 5
     call write_all
     test r12d, TERM_F_PASTE
     jz .Ltrest_paste_done
-    mov edi, 1
+    mov edi, [rip + g_pick_out_fd]
     lea rsi, [rip + .Ltpaste_off]
     mov edx, 8
     call write_all
 .Ltrest_paste_done:
     cmp dword ptr [rip + term_bg_set], 0
     je .Ltrest_nobg
-    mov edi, 1
+    mov edi, [rip + g_pick_out_fd]
     lea rsi, [rip + .Lt_osc111]
     mov edx, 7
     call write_all
     mov dword ptr [rip + term_bg_set], 0
 .Ltrest_nobg:
-    mov edi, 1
+    mov edi, [rip + g_pick_out_fd]
     lea rsi, [rip + .Ltsgr0]
     mov edx, 4
     call write_all
-    mov edi, 1
+    mov edi, [rip + g_pick_out_fd]
     lea rsi, [rip + .Ltshow]
     mov edx, 6
     call write_all
     test r12d, TERM_F_ALT
     jz .Ltrest_raw
-    mov edi, 1
+    mov edi, [rip + g_pick_out_fd]
     lea rsi, [rip + .Ltrest_alt]
     mov edx, 8
     call write_all
@@ -246,7 +246,7 @@ FN term_restore
     call os_tty_restore
     test r12d, TERM_F_ALT
     jnz .Ltrest_clear
-    mov edi, 1
+    mov edi, [rip + g_pick_out_fd]
     lea rsi, [rip + .Ltnl]
     mov edx, 1
     call write_all
