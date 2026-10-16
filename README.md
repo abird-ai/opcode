@@ -78,7 +78,7 @@ Cross targets (the toolchain must be on `PATH` or reachable through `nix develop
 Tagged pushes are built by `.github/workflows/release.yml`:
 
 ```sh
-git tag v0.2.0 && git push origin v0.2.0
+git tag v0.3.0 && git push origin v0.3.0
 ```
 
 Each artifact is named `opcode-<os>-<arch>[.exe]`, plus a `SHA256SUMS` file; all
