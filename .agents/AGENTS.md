@@ -81,7 +81,11 @@ sockets/DNS/TLS, per OS), `src/wire` (HTTP/SSE/JSON writer/URL), `src/core`
 Work is tracked as plain markdown checklists. There are no per-run `STATE.md`,
 `REPORT.md`, `decisions.md`, `contracts/` or evidence bundles: the git history
 is the evidence, and a user-approved snapshot commit at the tip is the accepted
-proof of record. **The rules are `.agents/plans/TODO-SPEC.md`.** In short:
+proof of record. **The rules are `.agents/plans/TODO-SPEC.md`.** A plan is
+`.agents/plans/<plan>/` with an optional `README.md` (details plus design,
+decisions and references sections, opened with the plan's `Author:` /
+`Co-authors:`) and a required, extensive `TODO.md` whose completed work is
+grouped under the commit that landed it. In short:
 
 - `.agents/plans/TODO.md` — the plan ledger: one line per plan. A plan is
   `done` only when its `plans/<plan>/TODO.md` has no open items.
