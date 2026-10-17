@@ -108,3 +108,12 @@ grouped under the commit that landed it. In short:
 - `.agents/docs/` — `design-decisions.md`, `platform.md`, `core-agent.md`,
   `extensibility.md`, `tui.md`, `roadmap.md`, `ports.md`.
 - `src/*/API.md` — frozen per-layer API contracts.
+
+## Git safety
+
+Commits are signed; never disable signing. Never push, force-push, tag,
+publish, deploy, or run destructive operations — history rewrite, `reset
+--hard`, branch deletion, or touching another agent's staged or uncommitted
+work — without explicit user confirmation for that action. Confirm each such
+action on its own: a request to "commit" or "apply" is not authorization to
+push.
