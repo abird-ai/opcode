@@ -494,7 +494,7 @@ MIT-licensed model metadata published by pi.
 
 ```text
 AGENTS.md              coding-agent guide (build, ABI, tests)
-.agents/plans/DESIGN.md        this document
+.agents/docs/design.md        this document
 .agents/docs/                  design-decisions, platform, core-agent, extensibility, tui, ports
 include/opcode_plugin.h         stable C ABI (C/Rust/Zig)
 Makefile                       Linux/native build plus the cross-build recipes

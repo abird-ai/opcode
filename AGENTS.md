@@ -117,7 +117,7 @@ evidence. Push, tag and release remain separately authorized actions.
 - `.agents/plans/README.md` — the plan/TODO rules.
 - `.agents/plans/TODO.md` — the plan ledger; `plans/<plan>/TODO.md` — per-plan
   checklists.
-- `.agents/plans/DESIGN.md` — goals, architecture, decisions.
+- `.agents/docs/design.md` — goals, architecture, decisions.
 - `.agents/docs/` — `design-decisions.md`, `platform.md`, `core-agent.md`,
   `extensibility.md`, `tui.md`, `roadmap.md`, `ports.md`.
 - `src/*/API.md` — frozen per-layer API contracts.
