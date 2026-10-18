@@ -1,8 +1,37 @@
-# Opcode — guide for coding agents
+# AGENTS.md
+
+<!-- BEGIN common -->
+## Shared conventions
+
+These are byte-identical across all abird repositories. Repo-specific rules
+follow the markers below.
+
+- **Source of truth.** Live source, tests and executed results outrank dated
+  prose. Start at `.agents/plans/README.md` (overview + spec), then work from
+  `.agents/plans/TODO.md` (the queue).
+- **XDG paths.** Where the project owns user config, data, cache or state,
+  resolve it under `$XDG_*_HOME/abird/<project>` — an absolute XDG base, falling
+  back to `HOME` when unset. No legacy or alternate root.
+- **Shared `.gitignore`.** The block at the top of `.gitignore` is identical
+  across repos; repo-specific entries follow it. Keep it mechanical.
+- **Preserve other work.** Never revert or overwrite changes you did not make.
+  Stage explicit paths, not broad globs, and leave other agents' staged or
+  uncommitted work untouched.
+- **Git safety.** Commits are signed; never disable signing. Never push,
+  force-push, tag, publish, deploy, or run destructive operations — history
+  rewrite, `reset --hard`, branch deletion, or touching another agent's
+  staged or uncommitted work — without explicit user confirmation for each
+  action. A request to "commit" or "apply" is not authorization to push.
+<!-- END common -->
+
+<!-- BEGIN repo-specific -->
+## Repository
 
 Opcode is a static, no-libc coding agent written in hand-written x86-64 assembly
 (GNU `as`, Intel syntax) targeting Linux first. The core is assembly; the only C
 linked in is vendored freestanding mbedTLS and freestanding plugin code.
+
+- **XDG project:** `abird/opcode`.
 
 ## Build and test
 
@@ -76,32 +105,16 @@ sockets/DNS/TLS, per OS), `src/wire` (HTTP/SSE/JSON writer/URL), `src/core`
 - `opcode update` checks
   `https://api.github.com/repos/abird-ai/opcode/releases/latest`.
 
-## Plan / TODO workflow
+## Plans and parallel work
 
-Work is tracked as plain markdown checklists. There are no per-run `STATE.md`,
-`REPORT.md`, `decisions.md`, `contracts/` or evidence bundles: the git history
-is the evidence, and a user-approved snapshot commit at the tip is the accepted
-proof of record. **The rules are `.agents/plans/TODO-SPEC.md`.** A plan is
-`.agents/plans/<plan>/` with an optional `README.md` (details plus design,
-decisions and references sections, opened with the plan's `Author:` /
-`Co-authors:`) and a required, extensive `TODO.md` whose completed work is
-grouped under the commit that landed it. In short:
-
-- `.agents/plans/TODO.md` — the plan ledger: one line per plan. A plan is
-  `done` only when its `plans/<plan>/TODO.md` has no open items.
-- `.agents/plans/<plan>/TODO.md` — a plan's living checklist (`Status:`,
-  `Provenance:`, `Proof of record:`; `## Done` / `## Uncommitted`; optional
-  `## Decisions` / `## Carried forward`).
-- `.agents/runs/<plan>-<session>/TODO.md` — a parallel workstream's private
-  checklist (`.agents/runs/` is gitignored); append back to the plan and delete
-  the run file when the workstream is committed.
-- Tick an item only after its checks pass, in the same session, on the commit
-  you are marking. The check is the evidence. `[x]` done · `[~]` in progress ·
-  `[ ]` not started · `[!]` blocked outside this repository.
+Work is tracked as plain markdown checklists under `.agents/plans/`; the rules
+are `.agents/plans/README.md`. There are no per-run `STATE.md`, `REPORT.md`,
+`decisions.md`, `contracts/` or evidence bundles — the git history is the
+evidence. Push, tag and release remain separately authorized actions.
 
 ## Design docs
 
-- `.agents/plans/TODO-SPEC.md` — the plan/TODO rules.
+- `.agents/plans/README.md` — the plan/TODO rules.
 - `.agents/plans/TODO.md` — the plan ledger; `plans/<plan>/TODO.md` — per-plan
   checklists.
 - `.agents/plans/DESIGN.md` — goals, architecture, decisions.
@@ -109,11 +122,4 @@ grouped under the commit that landed it. In short:
   `extensibility.md`, `tui.md`, `roadmap.md`, `ports.md`.
 - `src/*/API.md` — frozen per-layer API contracts.
 
-## Git safety
-
-Commits are signed; never disable signing. Never push, force-push, tag,
-publish, deploy, or run destructive operations — history rewrite, `reset
---hard`, branch deletion, or touching another agent's staged or uncommitted
-work — without explicit user confirmation for that action. Confirm each such
-action on its own: a request to "commit" or "apply" is not authorization to
-push.
+<!-- END repo-specific -->
