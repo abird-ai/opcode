@@ -1,10 +1,35 @@
+# Git
+/worktrees/
+/.agents/runs/*
+!/.agents/runs/README.md
+
+# Nix
+result/
+result-*
+.direnv/
+
+# Common build and dep dirs
+/tmp/
+**/target/
+**/node_modules/
+**/dist/
+.venv
+
+# Misc
+crash.log
+**/__pycache__/
+/.continue/
+/.kilocode/
+/.vscode/
+/.claude/
+.codex
+.kilo/
+
+# Repo-specific
 build/
 *.o
 *.tmp
-__pycache__/
 *.pyc
 result
-/result-*
-.agents/runs/
 .orchestrator/
 compile_commands.json
