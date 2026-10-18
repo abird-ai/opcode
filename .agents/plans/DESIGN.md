@@ -493,7 +493,7 @@ MIT-licensed model metadata published by pi.
 ## 11. Repository layout
 
 ```text
-.agents/AGENTS.md              coding-agent guide (build, ABI, tests)
+AGENTS.md              coding-agent guide (build, ABI, tests)
 .agents/plans/DESIGN.md        this document
 .agents/docs/                  design-decisions, platform, core-agent, extensibility, tui, ports
 include/opcode_plugin.h         stable C ABI (C/Rust/Zig)

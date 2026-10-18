@@ -4,7 +4,7 @@ Opcode tracks work as plain, hand-edited markdown checklists. This replaces
 handoff prose, per-run `STATE.md`/`REPORT.md`/`decisions.md`, evidence bundles
 and generated tracking files. The git history is the evidence, and a
 user-approved snapshot commit at the tip is the accepted proof of record. This
-file is the rulebook; `.agents/AGENTS.md` is the repository guide.
+file is the rulebook; `AGENTS.md` is the repository guide.
 
 ## Files
 
