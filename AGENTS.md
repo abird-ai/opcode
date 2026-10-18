@@ -1,6 +1,7 @@
 # AGENTS.md
 
 <!-- BEGIN common -->
+
 ## Shared conventions
 
 These are byte-identical across all abird repositories. Repo-specific rules
@@ -15,20 +16,30 @@ follow the markers below.
 - **Shared `.gitignore`.** The block at the top of `.gitignore` is identical
   across repos; repo-specific entries follow it. Keep it mechanical.
 - **Preserve other work.** Never revert or overwrite changes you did not make.
-  Stage explicit paths, not broad globs, and leave other agents' staged or
-  uncommitted work untouched.
-- **Terse writing.** Keep code comments and docs succinct. Comments need not
-  be full sentences; prefer symbols and fragments unless the user asked for
-  an explanation or the topic is design-level or otherwise complex. Prefer
-  bullets and engineering focus over prose in other docs.
+- **Owned changes only.** Commit only the paths you changed for the request.
+  Before committing, inspect `git diff --cached --stat`; if it lists files you
+  did not touch, stop and ask — unless the user explicitly asked you to include
+  them.
+- **Ownership.** A plan directory belongs to the `@owner` on the queue line, and
+  the coordinator alone reconciles `.agents/plans/TODO.md`; do not edit another
+  owner's plan or worktree unless the user explicitly asks.
+- **Clean pushes.** Do not push from a dirty worktree unless the user explicitly
+  asked to include those changes; otherwise commit/stash your own change first,
+  or push from a clean temporary worktree.
+- **Terse writing.** Keep code comments and docs succinct. Comments need not be
+  full sentences; prefer symbols and fragments unless the user asked for an
+  explanation or the topic is design-level or otherwise complex. Prefer bullets
+  and engineering focus over prose in other docs.
 - **Git safety.** Commits are signed; never disable signing. Never push,
   force-push, tag, publish, deploy, or run destructive operations — history
-  rewrite, `reset --hard`, branch deletion, or touching another agent's
-  staged or uncommitted work — without explicit user confirmation for each
-  action. A request to "commit" or "apply" is not authorization to push.
+  rewrite, `reset --hard`, branch deletion, or touching another agent's staged
+  or uncommitted work — without explicit user confirmation for each action. A
+  request to "commit" or "apply" is not authorization to push.
+
 <!-- END common -->
 
 <!-- BEGIN repo-specific -->
+
 ## Repository
 
 Opcode is a static, no-libc coding agent written in hand-written x86-64 assembly
@@ -39,13 +50,13 @@ linked in is vendored freestanding mbedTLS and freestanding plugin code.
 
 ## Build and test
 
-| Command | Result |
-| --- | --- |
-| `make` | build debug `build/opcode` |
-| `make release` | relink `build/opcode` stripped |
-| `make test` | build the unit-test binaries |
-| `make check` | build everything and run `tests/run.sh` |
-| `make clean` | remove `build/` |
+| Command                     | Result                                            |
+| --------------------------- | ------------------------------------------------- |
+| `make`                      | build debug `build/opcode`                        |
+| `make release`              | relink `build/opcode` stripped                    |
+| `make test`                 | build the unit-test binaries                      |
+| `make check`                | build everything and run `tests/run.sh`           |
+| `make clean`                | remove `build/`                                   |
 | `nix build` / `nix develop` | package / dev shell (x86_64-linux, aarch64-linux) |
 
 Toolchain: GNU `as` and `ld`, `clang`, `python3`. `make check` must end with
@@ -75,20 +86,21 @@ sockets/DNS/TLS, per OS), `src/wire` (HTTP/SSE/JSON writer/URL), `src/core`
 - Use `PROLOGUE frame` / `EPILOGUE`; `frame` must be a multiple of 16 and `rsp`
   must stay 16-byte aligned at every `call`. Functions start with `FN name`.
 - Struct layouts live in `.inc` files via the `STRUCT`/`F`/`ENDSTRUCT` macros.
-- JSON only at external boundaries (wire, sessions, RPC, plugins); typed
-  structs internally. No hidden allocations in hot paths.
+- JSON only at external boundaries (wire, sessions, RPC, plugins); typed structs
+  internally. No hidden allocations in hot paths.
 
 ## Golden-test workflow
 
-- `tests/*.s` are standalone programs linked against the core objects; stdout
-  is compared byte-for-byte with `tests/data/<name>.expected`.
+- `tests/*.s` are standalone programs linked against the core objects; stdout is
+  compared byte-for-byte with `tests/data/<name>.expected`.
 - `tests/run.sh` runs those, the CLI checks, and the shell/python integration
   suites. Update the matching `.expected` file with any output change.
 - Wire behavior uses `FWIR1` replays (`opcode fetch --record` captures;
   `--replay` consumes on both fetch and the agent, `tests/data/*.wire`).
-- TUI checks run headlessly: `./build/opcode --headless WxH --script
-  tests/scripts/tui.rsc` (verbs `type`, `key`, `prompt`, `wait`, `resize`,
-  `print-screen`, `quit`).
+- TUI checks run headlessly:
+  `./build/opcode --headless WxH --script
+  tests/scripts/tui.rsc` (verbs
+  `type`, `key`, `prompt`, `wait`, `resize`, `print-screen`, `quit`).
 
 ## Current behavior notes
 
